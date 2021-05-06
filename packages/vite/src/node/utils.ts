@@ -205,6 +205,10 @@ export function isObject(value: unknown): value is Record<string, any> {
   return Object.prototype.toString.call(value) === '[object Object]'
 }
 
+export function isDefined<T>(value: T | undefined | null): value is T {
+  return value !== undefined && value !== null
+}
+
 export function lookupFile(
   dir: string,
   formats: string[],
@@ -323,11 +327,15 @@ export function writeFile(
   fs.writeFileSync(filename, content)
 }
 
-export function emptyDir(dir: string): void {
-  if (!fs.existsSync(dir)) {
-    return
-  }
+/**
+ * Delete every file and subdirectory. **The given directory must exist.**
+ * Pass an optional `skip` array to preserve files in the root directory.
+ */
+export function emptyDir(dir: string, skip?: string[]): void {
   for (const file of fs.readdirSync(dir)) {
+    if (skip?.includes(file)) {
+      continue
+    }
     const abs = path.resolve(dir, file)
     // baseline is Node 12 so can't use rmSync :(
     if (fs.lstatSync(abs).isDirectory()) {
@@ -451,4 +459,8 @@ export function combineSourcemaps(
   }
 
   return map as RawSourceMap
+}
+
+export function unique<T>(arr: T[]): T[] {
+  return Array.from(new Set(arr))
 }

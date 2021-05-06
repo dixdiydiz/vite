@@ -205,7 +205,6 @@ export function buildImportAnalysisPlugin(config: ResolvedConfig): Plugin {
         return
       }
 
-      const isPolyfillEnabled = config.build.polyfillDynamicImport
       for (const file in bundle) {
         const chunk = bundle[file]
         // can't use chunk.dynamicImports.length here since some modules e.g.
@@ -221,14 +220,8 @@ export function buildImportAnalysisPlugin(config: ResolvedConfig): Plugin {
 
           if (imports.length) {
             const s = new MagicString(code)
-            const analyzed: Set<string> = new Set<string>()
             for (let index = 0; index < imports.length; index++) {
-              const { s: start, e: end, d: dynamicIndex } = imports[index]
-              // if dynamic import polyfill is used, rewrite the import to
-              // use the polyfilled function.
-              if (isPolyfillEnabled) {
-                s.overwrite(dynamicIndex, dynamicIndex + 6, `__import__`)
-              }
+              const { s: start, e: end } = imports[index]
               // check the chunk being imported
               const url = code.slice(start, end)
               const deps: Set<string> = new Set()
@@ -236,6 +229,7 @@ export function buildImportAnalysisPlugin(config: ResolvedConfig): Plugin {
               if (url[0] === `"` && url[url.length - 1] === `"`) {
                 const ownerFilename = chunk.fileName
                 // literal import - trace direct imports and add to deps
+                const analyzed: Set<string> = new Set<string>()
                 const addDeps = (filename: string) => {
                   if (filename === ownerFilename) return
                   if (analyzed.has(filename)) return
