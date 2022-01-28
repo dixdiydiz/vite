@@ -8,8 +8,14 @@ module.exports = {
       foo: 1,
       bar: {
         baz: 2
+      },
+      process: {
+        env: {
+          SOMEVAR: '"PROCESS MAY BE PROPERTY"'
+        }
       }
     },
+    __VAR_NAME__: false,
     'process.env.SOMEVAR': '"SOMEVAR"'
   }
 }

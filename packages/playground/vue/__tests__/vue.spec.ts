@@ -22,8 +22,16 @@ test(':slotted', async () => {
   expect(await getColor('.slotted')).toBe('red')
 })
 
-test('scan deps from <script setup lang="ts">', async () => {
-  expect(await page.textContent('.scan')).toBe('ok')
+describe('dep scan', () => {
+  test('scan deps from <script setup lang="ts">', async () => {
+    expect(await page.textContent('.scan')).toBe('ok')
+  })
+
+  test('find deps on initial scan', () => {
+    serverLogs.forEach((log) => {
+      expect(log).not.toMatch('new dependencies found')
+    })
+  })
 })
 
 describe('pre-processors', () => {
@@ -55,6 +63,21 @@ describe('pre-processors', () => {
       code.replace('@color: green;', '@color: blue;')
     )
     await untilUpdated(() => getColor(el), 'blue')
+  })
+
+  test('stylus + change lang', async () => {
+    expect(await getColor('p.pug-stylus')).toBe('orange')
+    editFile('PreProcessors.vue', (code) =>
+      code
+        .replace('<style lang="stylus">', '<style lang="scss">')
+        .replace('color = orange', '$color: yellow;')
+        .replace('color: color', '{ color: $color; }')
+    )
+    await untilUpdated(() => getColor('p.pug-stylus'), 'yellow')
+    editFile('PreProcessors.vue', (code) =>
+      code.replace('$color: yellow;', '$color: orange;')
+    )
+    await untilUpdated(() => getColor('p.pug-stylus'), 'orange')
   })
 })
 
@@ -142,6 +165,13 @@ describe('hmr', () => {
     await untilUpdated(() => page.textContent('.hmr-inc'), 'count is 100')
   })
 
+  test('global hmr for some scenarios', async () => {
+    editFile('Hmr.vue', (code) =>
+      code.replace('</template>', '  <Node/>\n' + '</template>')
+    )
+    await untilUpdated(() => page.innerHTML('.node'), 'this is node')
+  })
+
   test('should re-render when template is emptied', async () => {
     editFile('Hmr.vue', () => '')
     await untilUpdated(() => page.innerHTML('.hmr-block'), '<!---->')
@@ -180,5 +210,35 @@ describe('src imports', () => {
 describe('custom blocks', () => {
   test('should work', async () => {
     expect(await page.textContent('.custom-block')).toMatch('こんにちは')
+  })
+})
+
+describe('async component', () => {
+  test('should work', async () => {
+    expect(await page.textContent('.async-component')).toMatch('ab == ab')
+  })
+})
+
+describe('ref transform', () => {
+  test('should work', async () => {
+    expect(await page.textContent('.ref-transform')).toMatch('0')
+    await page.click('.ref-transform')
+    expect(await page.textContent('.ref-transform')).toMatch('1')
+  })
+})
+
+describe('custom element', () => {
+  test('should work', async () => {
+    await page.click('.custom-element')
+    expect(await page.textContent('.custom-element')).toMatch('count: 2')
+    expect(await getColor('.custom-element')).toBe('green')
+  })
+})
+
+describe('setup import template', () => {
+  test('should work', async () => {
+    expect(await page.textContent('.setup-import-template')).toMatch('0')
+    await page.click('.setup-import-template')
+    expect(await page.textContent('.setup-import-template')).toMatch('1')
   })
 })

@@ -1,69 +1,70 @@
-import os from 'os'
 import fs from 'fs'
 import path from 'path'
-import * as net from 'net'
-import * as http from 'http'
-import * as https from 'https'
+import type * as net from 'net'
+import type * as http from 'http'
 import connect from 'connect'
 import corsMiddleware from 'cors'
-import chalk from 'chalk'
-import { AddressInfo } from 'net'
+import colors from 'picocolors'
+import type { AddressInfo } from 'net'
 import chokidar from 'chokidar'
-import { resolveHttpServer } from './http'
-import { resolveConfig, InlineConfig, ResolvedConfig } from '../config'
-import {
-  createPluginContainer,
-  PluginContainer
-} from '../server/pluginContainer'
-import { FSWatcher, WatchOptions } from 'types/chokidar'
-import { createWebSocketServer, WebSocketServer } from '../server/ws'
+import type { CommonServerOptions } from '../http'
+import { resolveHttpsConfig, resolveHttpServer, httpServerStart } from '../http'
+import type { InlineConfig, ResolvedConfig } from '../config'
+import { resolveConfig } from '../config'
+import type { PluginContainer } from './pluginContainer'
+import { createPluginContainer } from './pluginContainer'
+import type { FSWatcher, WatchOptions } from 'types/chokidar'
+import type { WebSocketServer } from './ws'
+import { createWebSocketServer } from './ws'
 import { baseMiddleware } from './middlewares/base'
-import { proxyMiddleware, ProxyOptions } from './middlewares/proxy'
+import { proxyMiddleware } from './middlewares/proxy'
+import { spaFallbackMiddleware } from './middlewares/spaFallback'
 import { transformMiddleware } from './middlewares/transform'
 import {
   createDevHtmlTransformFn,
   indexHtmlMiddleware
 } from './middlewares/indexHtml'
-import history from 'connect-history-api-fallback'
-import { decodeURIMiddleware } from './middlewares/decodeURI'
 import {
   serveRawFsMiddleware,
   servePublicMiddleware,
   serveStaticMiddleware
 } from './middlewares/static'
 import { timeMiddleware } from './middlewares/time'
-import { ModuleGraph, ModuleNode } from './moduleGraph'
-import { Connect } from 'types/connect'
-import { createDebugger, normalizePath } from '../utils'
+import type { ModuleNode } from './moduleGraph'
+import { ModuleGraph } from './moduleGraph'
+import type { Connect } from 'types/connect'
+import { ensureLeadingSlash, normalizePath } from '../utils'
 import { errorMiddleware, prepareError } from './middlewares/error'
-import { handleHMRUpdate, HmrOptions, handleFileAddUnlink } from './hmr'
+import type { HmrOptions } from './hmr'
+import { handleHMRUpdate, handleFileAddUnlink } from './hmr'
 import { openBrowser } from './openBrowser'
 import launchEditorMiddleware from 'launch-editor-middleware'
-import { TransformResult } from 'rollup'
-import { TransformOptions, transformRequest } from './transformRequest'
-import {
-  transformWithEsbuild,
-  ESBuildTransformResult
-} from '../plugins/esbuild'
-import { TransformOptions as EsbuildTransformOptions } from 'esbuild'
-import { DepOptimizationMetadata, optimizeDeps } from '../optimizer'
+import type { TransformOptions, TransformResult } from './transformRequest'
+import { transformRequest } from './transformRequest'
+import type { ESBuildTransformResult } from '../plugins/esbuild'
+import { transformWithEsbuild } from '../plugins/esbuild'
+import type { TransformOptions as EsbuildTransformOptions } from 'esbuild'
+import type { DepOptimizationMetadata } from '../optimizer'
+import { optimizeDeps } from '../optimizer'
 import { ssrLoadModule } from '../ssr/ssrModuleLoader'
 import { resolveSSRExternal } from '../ssr/ssrExternal'
-import { ssrRewriteStacktrace } from '../ssr/ssrStacktrace'
+import {
+  rebindErrorStacktrace,
+  ssrRewriteStacktrace
+} from '../ssr/ssrStacktrace'
+import { ssrTransform } from '../ssr/ssrTransform'
 import { createMissingImporterRegisterFn } from '../optimizer/registerMissing'
+import { resolveHostname } from '../utils'
+import { searchForWorkspaceRoot } from './searchRoot'
+import { CLIENT_DIR } from '../constants'
+import { printCommonServerUrls } from '../logger'
+import { performance } from 'perf_hooks'
+import { invalidatePackageData } from '../packages'
+import type { SourceMap } from 'rollup'
 
-export interface ServerOptions {
-  host?: string | boolean
-  port?: number
-  /**
-   * Enable TLS + HTTP/2.
-   * Note: this downgrades to TLS only when the proxy option is also used.
-   */
-  https?: boolean | https.ServerOptions
-  /**
-   * Open browser window on startup
-   */
-  open?: boolean | string
+export { searchForWorkspaceRoot } from './searchRoot'
+
+export interface ServerOptions extends CommonServerOptions {
   /**
    * Force dep pre-optimization regardless of whether deps have changed.
    */
@@ -78,67 +79,65 @@ export interface ServerOptions {
    */
   watch?: WatchOptions
   /**
-   * Configure custom proxy rules for the dev server. Expects an object
-   * of `{ key: options }` pairs.
-   * Uses [`http-proxy`](https://github.com/http-party/node-http-proxy).
-   * Full options [here](https://github.com/http-party/node-http-proxy#options).
-   *
-   * Example `vite.config.js`:
-   * ``` js
-   * module.exports = {
-   *   proxy: {
-   *     // string shorthand
-   *     '/foo': 'http://localhost:4567/foo',
-   *     // with options
-   *     '/api': {
-   *       target: 'http://jsonplaceholder.typicode.com',
-   *       changeOrigin: true,
-   *       rewrite: path => path.replace(/^\/api/, '')
-   *     }
-   *   }
-   * }
-   * ```
-   */
-  proxy?: Record<string, string | ProxyOptions>
-  /**
-   * Configure CORS for the dev server.
-   * Uses https://github.com/expressjs/cors.
-   * Set to `true` to allow all methods from any origin, or configure separately
-   * using an object.
-   */
-  cors?: CorsOptions | boolean
-  /**
-   * If enabled, vite will exit if specified port is already in use
-   */
-  strictPort?: boolean
-  /**
    * Create Vite dev server to be used as a middleware in an existing server
    */
-  middlewareMode?: boolean
+  middlewareMode?: boolean | 'html' | 'ssr'
   /**
    * Prepend this folder to http requests, for use when proxying vite as a subfolder
    * Should start and end with the `/` character
    */
   base?: string
+  /**
+   * Options for files served via '/\@fs/'.
+   */
+  fs?: FileSystemServeOptions
+  /**
+   * Origin for the generated asset URLs.
+   */
+  origin?: string
+  /**
+   * Pre-transform known direct imports
+   *
+   * @experimental this option is experimental and might be changed in the future
+   * @default true
+   */
+  preTransformRequests?: boolean
 }
 
-/**
- * https://github.com/expressjs/cors#configuration-options
- */
-export interface CorsOptions {
-  origin?:
-    | CorsOrigin
-    | ((origin: string, cb: (err: Error, origins: CorsOrigin) => void) => void)
-  methods?: string | string[]
-  allowedHeaders?: string | string[]
-  exposedHeaders?: string | string[]
-  credentials?: boolean
-  maxAge?: number
-  preflightContinue?: boolean
-  optionsSuccessStatus?: number
+export interface ResolvedServerOptions extends ServerOptions {
+  fs: Required<FileSystemServeOptions>
 }
 
-export type CorsOrigin = boolean | string | RegExp | (string | RegExp)[]
+export interface FileSystemServeOptions {
+  /**
+   * Strictly restrict file accessing outside of allowing paths.
+   *
+   * Set to `false` to disable the warning
+   *
+   * @default true
+   */
+  strict?: boolean
+
+  /**
+   * Restrict accessing files outside the allowed directories.
+   *
+   * Accepts absolute path or a path relative to project root.
+   * Will try to search up for workspace root by default.
+   */
+  allow?: string[]
+
+  /**
+   * Restrict accessing files that matches the patterns.
+   *
+   * This will have higher priority than `allow`.
+   * Glob patterns are supported.
+   *
+   * @default ['.env', '.env.*', '*.crt', '*.pem']
+   *
+   * @experimental
+   */
+  deny?: string[]
+}
 
 export type ServerHook = (
   server: ViteDevServer
@@ -196,10 +195,16 @@ export interface ViteDevServer {
   /**
    * Apply vite built-in HTML transforms and any plugin HTML transforms.
    */
-  transformIndexHtml(url: string, html: string): Promise<string>
+  transformIndexHtml(
+    url: string,
+    html: string,
+    originalUrl?: string
+  ): Promise<string>
   /**
    * Util for transforming a file with esbuild.
    * Can be useful for certain plugins.
+   *
+   * @deprecated import `transformWithEsbuild` from `vite` instead
    */
   transformWithEsbuild(
     code: string,
@@ -207,6 +212,15 @@ export interface ViteDevServer {
     options?: EsbuildTransformOptions,
     inMap?: object
   ): Promise<ESBuildTransformResult>
+  /**
+   * Transform module code into SSR format.
+   * @experimental
+   */
+  ssrTransform(
+    code: string,
+    inMap: SourceMap | null,
+    url: string
+  ): Promise<TransformResult | null>
   /**
    * Load a given URL as an instantiated module for SSR.
    */
@@ -224,6 +238,16 @@ export interface ViteDevServer {
    */
   close(): Promise<void>
   /**
+   * Print server urls
+   */
+  printUrls(): void
+  /**
+   * Restart the server.
+   *
+   * @param forceOptimize - force the optimizer to re-bundle, same as --force cli flag
+   */
+  restart(forceOptimize?: boolean): Promise<void>
+  /**
    * @internal
    */
   _optimizeDepsMetadata: DepOptimizationMetadata | null
@@ -238,11 +262,21 @@ export interface ViteDevServer {
   _globImporters: Record<
     string,
     {
-      base: string
-      pattern: string
       module: ModuleNode
+      importGlobs: {
+        base: string
+        pattern: string
+      }[]
     }
   >
+  /**
+   * @internal
+   */
+  _restartPromise: Promise<void> | null
+  /**
+   * @internal
+   */
+  _forceOptimizeOnRestart: boolean
   /**
    * @internal
    */
@@ -250,11 +284,17 @@ export interface ViteDevServer {
   /**
    * @internal
    */
-  _registerMissingImport: ((id: string, resolved: string) => void) | null
+  _registerMissingImport:
+    | ((id: string, resolved: string, ssr: boolean | undefined) => void)
+    | null
   /**
    * @internal
    */
   _pendingReload: Promise<void> | null
+  /**
+   * @internal
+   */
+  _pendingRequests: Map<string, Promise<TransformResult | null>>
 }
 
 export async function createServer(
@@ -262,34 +302,47 @@ export async function createServer(
 ): Promise<ViteDevServer> {
   const config = await resolveConfig(inlineConfig, 'serve', 'development')
   const root = config.root
-  const serverConfig = config.server || {}
-  const middlewareMode = !!serverConfig.middlewareMode
+  const serverConfig = config.server
+  const httpsOptions = await resolveHttpsConfig(
+    config.server.https,
+    config.cacheDir
+  )
+  let { middlewareMode } = serverConfig
+  if (middlewareMode === true) {
+    middlewareMode = 'ssr'
+  }
 
   const middlewares = connect() as Connect.Server
   const httpServer = middlewareMode
     ? null
-    : await resolveHttpServer(serverConfig, middlewares)
-  const ws = createWebSocketServer(httpServer, config)
+    : await resolveHttpServer(serverConfig, middlewares, httpsOptions)
+  const ws = createWebSocketServer(httpServer, config, httpsOptions)
 
   const { ignored = [], ...watchOptions } = serverConfig.watch || {}
   const watcher = chokidar.watch(path.resolve(root), {
-    ignored: ['**/node_modules/**', '**/.git/**', ...ignored],
+    ignored: [
+      '**/node_modules/**',
+      '**/.git/**',
+      ...(Array.isArray(ignored) ? ignored : [ignored])
+    ],
     ignoreInitial: true,
     ignorePermissionErrors: true,
     disableGlobbing: true,
     ...watchOptions
   }) as FSWatcher
 
-  const plugins = config.plugins
-  const container = await createPluginContainer(config, watcher)
-  const moduleGraph = new ModuleGraph(container)
+  const moduleGraph: ModuleGraph = new ModuleGraph((url, ssr) =>
+    container.resolveId(url, undefined, { ssr })
+  )
+
+  const container = await createPluginContainer(config, moduleGraph, watcher)
   const closeHttpServer = createServerCloseFn(httpServer)
 
   // eslint-disable-next-line prefer-const
   let exitProcess: () => void
 
   const server: ViteDevServer = {
-    config: config,
+    config,
     middlewares,
     get app() {
       config.logger.warn(
@@ -302,25 +355,25 @@ export async function createServer(
     pluginContainer: container,
     ws,
     moduleGraph,
+    ssrTransform,
     transformWithEsbuild,
     transformRequest(url, options) {
       return transformRequest(url, server, options)
     },
-    transformIndexHtml: null as any,
+    transformIndexHtml: null!, // to be immediately set
     ssrLoadModule(url) {
-      if (!server._ssrExternals) {
-        server._ssrExternals = resolveSSRExternal(
-          config,
-          server._optimizeDepsMetadata
-            ? Object.keys(server._optimizeDepsMetadata.optimized)
-            : []
-        )
-      }
+      server._ssrExternals ||= resolveSSRExternal(
+        config,
+        server._optimizeDepsMetadata
+          ? Object.keys(server._optimizeDepsMetadata.optimized)
+          : []
+      )
       return ssrLoadModule(url, server)
     },
     ssrFixStacktrace(e) {
       if (e.stack) {
-        e.stack = ssrRewriteStacktrace(e.stack, moduleGraph)
+        const stacktrace = ssrRewriteStacktrace(e.stack, moduleGraph)
+        rebindErrorStacktrace(e, stacktrace)
       }
     },
     listen(port?: number, isRestart?: boolean) {
@@ -329,7 +382,7 @@ export async function createServer(
     async close() {
       process.off('SIGTERM', exitProcess)
 
-      if (!process.stdin.isTTY) {
+      if (!middlewareMode && process.env.CI !== 'true') {
         process.stdin.off('end', exitProcess)
       }
 
@@ -340,12 +393,33 @@ export async function createServer(
         closeHttpServer()
       ])
     },
+    printUrls() {
+      if (httpServer) {
+        printCommonServerUrls(httpServer, config.server, config)
+      } else {
+        throw new Error('cannot print server URLs in middleware mode.')
+      }
+    },
+    async restart(forceOptimize: boolean) {
+      if (!server._restartPromise) {
+        server._forceOptimizeOnRestart = !!forceOptimize
+        server._restartPromise = restartServer(server).finally(() => {
+          server._restartPromise = null
+          server._forceOptimizeOnRestart = false
+        })
+      }
+      return server._restartPromise
+    },
+
     _optimizeDepsMetadata: null,
     _ssrExternals: null,
-    _globImporters: {},
+    _globImporters: Object.create(null),
+    _restartPromise: null,
+    _forceOptimizeOnRestart: false,
     _isRunningOptimizer: false,
     _registerMissingImport: null,
-    _pendingReload: null
+    _pendingReload: null,
+    _pendingRequests: new Map()
   }
 
   server.transformIndexHtml = createDevHtmlTransformFn(server)
@@ -360,12 +434,24 @@ export async function createServer(
 
   process.once('SIGTERM', exitProcess)
 
-  if (!process.stdin.isTTY) {
+  if (!middlewareMode && process.env.CI !== 'true') {
     process.stdin.on('end', exitProcess)
+  }
+
+  const { packageCache } = config
+  const setPackageData = packageCache.set.bind(packageCache)
+  packageCache.set = (id, pkg) => {
+    if (id.endsWith('.json')) {
+      watcher.add(id)
+    }
+    return setPackageData(id, pkg)
   }
 
   watcher.on('change', async (file) => {
     file = normalizePath(file)
+    if (file.endsWith('/package.json')) {
+      return invalidatePackageData(packageCache, file)
+    }
     // invalidate module graph cache on file change
     moduleGraph.onFileChange(file)
     if (serverConfig.hmr !== false) {
@@ -388,9 +474,16 @@ export async function createServer(
     handleFileAddUnlink(normalizePath(file), server, true)
   })
 
+  if (!middlewareMode && httpServer) {
+    httpServer.once('listening', () => {
+      // update actual port since this may be different from initial value
+      serverConfig.port = (httpServer.address() as AddressInfo).port
+    })
+  }
+
   // apply server configuration hooks from plugins
   const postHooks: ((() => void) | void)[] = []
-  for (const plugin of plugins) {
+  for (const plugin of config.plugins) {
     if (plugin.configureServer) {
       postHooks.push(await plugin.configureServer(server))
     }
@@ -424,44 +517,28 @@ export async function createServer(
   middlewares.use('/__open-in-editor', launchEditorMiddleware())
 
   // hmr reconnect ping
-  middlewares.use('/__vite_ping', (_, res) => res.end('pong'))
-
-  //decode request url
-  middlewares.use(decodeURIMiddleware())
+  // Keep the named function. The name is visible in debug logs via `DEBUG=connect:dispatcher ...`
+  middlewares.use('/__vite_ping', function viteHMRPingMiddleware(_, res) {
+    res.end('pong')
+  })
 
   // serve static files under /public
   // this applies before the transform middleware so that these files are served
   // as-is without transforms.
-  middlewares.use(servePublicMiddleware(config.publicDir))
+  if (config.publicDir) {
+    middlewares.use(servePublicMiddleware(config.publicDir))
+  }
 
   // main transform middleware
   middlewares.use(transformMiddleware(server))
 
   // serve static files
-  middlewares.use(serveRawFsMiddleware())
-  middlewares.use(serveStaticMiddleware(root, config))
+  middlewares.use(serveRawFsMiddleware(server))
+  middlewares.use(serveStaticMiddleware(root, server))
 
   // spa fallback
-  if (!middlewareMode) {
-    middlewares.use(
-      history({
-        logger: createDebugger('vite:spa-fallback'),
-        // support /dir/ without explicit index.html
-        rewrites: [
-          {
-            from: /\/$/,
-            to({ parsedUrl }: any) {
-              const rewritten = parsedUrl.pathname + 'index.html'
-              if (fs.existsSync(path.join(root, rewritten))) {
-                return rewritten
-              } else {
-                return `/index.html`
-              }
-            }
-          }
-        ]
-      })
-    )
+  if (!middlewareMode || middlewareMode === 'html') {
+    middlewares.use(spaFallbackMiddleware(root))
   }
 
   // run post config hooks
@@ -469,49 +546,50 @@ export async function createServer(
   // serve custom content instead of index.html.
   postHooks.forEach((fn) => fn && fn())
 
-  if (!middlewareMode) {
+  if (!middlewareMode || middlewareMode === 'html') {
     // transform index.html
     middlewares.use(indexHtmlMiddleware(server))
     // handle 404s
-    middlewares.use((_, res) => {
+    // Keep the named function. The name is visible in debug logs via `DEBUG=connect:dispatcher ...`
+    middlewares.use(function vite404Middleware(_, res) {
       res.statusCode = 404
       res.end()
     })
   }
 
   // error handler
-  middlewares.use(errorMiddleware(server, middlewareMode))
+  middlewares.use(errorMiddleware(server, !!middlewareMode))
 
   const runOptimize = async () => {
-    if (config.cacheDir) {
-      server._isRunningOptimizer = true
-      try {
-        server._optimizeDepsMetadata = await optimizeDeps(config)
-      } finally {
-        server._isRunningOptimizer = false
-      }
-      server._registerMissingImport = createMissingImporterRegisterFn(server)
+    server._isRunningOptimizer = true
+    try {
+      server._optimizeDepsMetadata = await optimizeDeps(
+        config,
+        config.server.force || server._forceOptimizeOnRestart
+      )
+    } finally {
+      server._isRunningOptimizer = false
     }
+    server._registerMissingImport = createMissingImporterRegisterFn(server)
   }
 
   if (!middlewareMode && httpServer) {
+    let isOptimized = false
     // overwrite listen to run optimizer before server start
     const listen = httpServer.listen.bind(httpServer)
     httpServer.listen = (async (port: number, ...args: any[]) => {
-      try {
-        await container.buildStart({})
-        await runOptimize()
-      } catch (e) {
-        httpServer.emit('error', e)
-        return
+      if (!isOptimized) {
+        try {
+          await container.buildStart({})
+          await runOptimize()
+          isOptimized = true
+        } catch (e) {
+          httpServer.emit('error', e)
+          return
+        }
       }
       return listen(port, ...args)
     }) as any
-
-    httpServer.once('listening', () => {
-      // update actual port since this may be different from initial value
-      serverConfig.port = (httpServer.address() as AddressInfo).port
-    })
   } else {
     await container.buildStart({})
     await runOptimize()
@@ -530,117 +608,52 @@ async function startServer(
     throw new Error('Cannot call server.listen in middleware mode.')
   }
 
-  const options = server.config.server || {}
-  let port = inlinePort || options.port || 3000
-  let hostname: string | undefined
-  if (options.host === undefined || options.host === 'localhost') {
-    // Use a secure default
-    hostname = '127.0.0.1'
-  } else if (options.host === true) {
-    // probably passed --host in the CLI, without arguments
-    hostname = undefined // undefined typically means 0.0.0.0 or :: (listen on all IPs)
-  } else {
-    hostname = options.host as string
-  }
+  const options = server.config.server
+  const port = inlinePort || options.port || 3000
+  const hostname = resolveHostname(options.host)
 
   const protocol = options.https ? 'https' : 'http'
   const info = server.config.logger.info
   const base = server.config.base
 
-  return new Promise((resolve, reject) => {
-    const onError = (e: Error & { code?: string }) => {
-      if (e.code === 'EADDRINUSE') {
-        if (options.strictPort) {
-          httpServer.removeListener('error', onError)
-          reject(new Error(`Port ${port} is already in use`))
-        } else {
-          info(`Port ${port} is in use, trying another one...`)
-          httpServer.listen(++port, hostname)
-        }
-      } else {
-        httpServer.removeListener('error', onError)
-        reject(e)
-      }
-    }
+  const serverPort = await httpServerStart(httpServer, {
+    port,
+    strictPort: options.strictPort,
+    host: hostname.host,
+    logger: server.config.logger
+  })
 
-    httpServer.on('error', onError)
-
-    httpServer.listen(port, hostname, () => {
-      httpServer.removeListener('error', onError)
-
-      info(
-        chalk.cyan(`\n  vite v${require('vite/package.json').version}`) +
-          chalk.green(` dev server running at:\n`),
-        {
-          clear: !server.config.logger.hasWarned
-        }
-      )
-
-      if (hostname === '127.0.0.1') {
-        const url = `${protocol}://localhost:${chalk.bold(port)}${base}`
-        info(`  > Local: ${chalk.cyan(url)}`)
-        info(`  > Network: ${chalk.dim('use `--host` to expose')}`)
-      } else {
-        const interfaces = os.networkInterfaces()
-        Object.keys(interfaces).forEach((key) =>
-          (interfaces[key] || [])
-            .filter((details) => details.family === 'IPv4')
-            .map((detail) => {
-              return {
-                type: detail.address.includes('127.0.0.1')
-                  ? 'Local:   '
-                  : 'Network: ',
-                host: detail.address
-              }
-            })
-            .forEach(({ type, host }) => {
-              const url = `${protocol}://${host}:${chalk.bold(port)}${base}`
-              info(`  > ${type} ${chalk.cyan(url)}`)
-            })
-        )
-      }
-
-      // @ts-ignore
-      if (global.__vite_start_time) {
+  // @ts-ignore
+  const profileSession = global.__vite_profile_session
+  if (profileSession) {
+    profileSession.post('Profiler.stop', (err: any, { profile }: any) => {
+      // Write profile to disk, upload, etc.
+      if (!err) {
+        const outPath = path.resolve('./vite-profile.cpuprofile')
+        fs.writeFileSync(outPath, JSON.stringify(profile))
         info(
-          chalk.cyan(
-            // @ts-ignore
-            `\n  ready in ${Date.now() - global.__vite_start_time}ms.\n`
+          colors.yellow(
+            `  CPU profile written to ${colors.white(colors.dim(outPath))}\n`
           )
         )
+      } else {
+        throw err
       }
-
-      // @ts-ignore
-      const profileSession = global.__vite_profile_session
-      if (profileSession) {
-        profileSession.post('Profiler.stop', (err: any, { profile }: any) => {
-          // Write profile to disk, upload, etc.
-          if (!err) {
-            const outPath = path.resolve('./vite-profile.cpuprofile')
-            fs.writeFileSync(outPath, JSON.stringify(profile))
-            info(
-              chalk.yellow(
-                `  CPU profile written to ${chalk.white.dim(outPath)}\n`
-              )
-            )
-          } else {
-            throw err
-          }
-        })
-      }
-
-      if (options.open && !isRestart) {
-        const path = typeof options.open === 'string' ? options.open : base
-        openBrowser(
-          `${protocol}://${hostname}:${port}${path}`,
-          true,
-          server.config.logger
-        )
-      }
-
-      resolve(server)
     })
-  })
+  }
+
+  if (options.open && !isRestart) {
+    const path = typeof options.open === 'string' ? options.open : base
+    openBrowser(
+      path.startsWith('http')
+        ? path
+        : `${protocol}://${hostname.name}:${serverPort}${path}`,
+      true,
+      server.config.logger
+    )
+  }
+
+  return server
 }
 
 function createServerCloseFn(server: http.Server | null) {
@@ -677,4 +690,79 @@ function createServerCloseFn(server: http.Server | null) {
         resolve()
       }
     })
+}
+
+function resolvedAllowDir(root: string, dir: string): string {
+  return ensureLeadingSlash(normalizePath(path.resolve(root, dir)))
+}
+
+export function resolveServerOptions(
+  root: string,
+  raw?: ServerOptions
+): ResolvedServerOptions {
+  const server: ResolvedServerOptions = {
+    preTransformRequests: true,
+    ...(raw as ResolvedServerOptions)
+  }
+  let allowDirs = server.fs?.allow
+  const deny = server.fs?.deny || ['.env', '.env.*', '*.{crt,pem}']
+
+  if (!allowDirs) {
+    allowDirs = [searchForWorkspaceRoot(root)]
+  }
+
+  allowDirs = allowDirs.map((i) => resolvedAllowDir(root, i))
+
+  // only push client dir when vite itself is outside-of-root
+  const resolvedClientDir = resolvedAllowDir(root, CLIENT_DIR)
+  if (!allowDirs.some((i) => resolvedClientDir.startsWith(i))) {
+    allowDirs.push(resolvedClientDir)
+  }
+
+  server.fs = {
+    strict: server.fs?.strict ?? true,
+    allow: allowDirs,
+    deny
+  }
+  return server
+}
+
+async function restartServer(server: ViteDevServer) {
+  // @ts-ignore
+  global.__vite_start_time = performance.now()
+  const { port: prevPort, host: prevHost } = server.config.server
+
+  await server.close()
+
+  let newServer = null
+  try {
+    newServer = await createServer(server.config.inlineConfig)
+  } catch (err: any) {
+    server.config.logger.error(err.message, {
+      timestamp: true
+    })
+    return
+  }
+
+  for (const key in newServer) {
+    if (key !== 'app') {
+      // @ts-ignore
+      server[key] = newServer[key]
+    }
+  }
+
+  const {
+    logger,
+    server: { port, host, middlewareMode }
+  } = server.config
+  if (!middlewareMode) {
+    await server.listen(port, true)
+    logger.info('server restarted.', { timestamp: true })
+    if (port !== prevPort || host !== prevHost) {
+      logger.info('')
+      server.printUrls()
+    }
+  } else {
+    logger.info('server restarted.', { timestamp: true })
+  }
 }

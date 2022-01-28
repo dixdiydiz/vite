@@ -1,5 +1,5 @@
-import { ResolvedConfig } from '../config'
-import { Plugin } from '../plugin'
+import type { ResolvedConfig } from '../config'
+import type { Plugin } from '../plugin'
 import aliasPlugin from '@rollup/plugin-alias'
 import { jsonPlugin } from './json'
 import { resolvePlugin } from './resolve'
@@ -8,11 +8,14 @@ import { importAnalysisPlugin } from './importAnalysis'
 import { cssPlugin, cssPostPlugin } from './css'
 import { assetPlugin } from './asset'
 import { clientInjectionsPlugin } from './clientInjections'
-import { htmlInlineScriptProxyPlugin } from './html'
+import { htmlInlineProxyPlugin } from './html'
 import { wasmPlugin } from './wasm'
+import { modulePreloadPolyfillPlugin } from './modulePreloadPolyfill'
 import { webWorkerPlugin } from './worker'
 import { preAliasPlugin } from './preAlias'
 import { definePlugin } from './define'
+import { ssrRequireHookPlugin } from './ssrRequireHook'
+import { workerImportMetaUrlPlugin } from './workerImportMetaUrl'
 
 export async function resolvePlugins(
   config: ResolvedConfig,
@@ -30,14 +33,19 @@ export async function resolvePlugins(
     isBuild ? null : preAliasPlugin(),
     aliasPlugin({ entries: config.resolve.alias }),
     ...prePlugins,
+    config.build.polyfillModulePreload
+      ? modulePreloadPolyfillPlugin(config)
+      : null,
     resolvePlugin({
       ...config.resolve,
       root: config.root,
       isProduction: config.isProduction,
       isBuild,
+      packageCache: config.packageCache,
+      ssrConfig: config.ssr,
       asSrc: true
     }),
-    htmlInlineScriptProxyPlugin(),
+    htmlInlineProxyPlugin(config),
     cssPlugin(config),
     config.esbuild !== false ? esbuildPlugin(config.esbuild) : null,
     jsonPlugin(
@@ -49,10 +57,12 @@ export async function resolvePlugins(
     ),
     wasmPlugin(config),
     webWorkerPlugin(config),
+    workerImportMetaUrlPlugin(config),
     assetPlugin(config),
     ...normalPlugins,
     definePlugin(config),
     cssPostPlugin(config),
+    config.build.ssr ? ssrRequireHookPlugin(config) : null,
     ...buildPlugins.pre,
     ...postPlugins,
     ...buildPlugins.post,

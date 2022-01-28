@@ -1,8 +1,17 @@
-import { ErrorPayload, HMRPayload, Update } from 'types/hmrPayload'
+import type {
+  ErrorPayload,
+  FullReloadPayload,
+  HMRPayload,
+  PrunePayload,
+  Update,
+  UpdatePayload
+} from 'types/hmrPayload'
+import type { CustomEventName } from 'types/customEvent'
 import { ErrorOverlay, overlayId } from './overlay'
-import './env'
+// eslint-disable-next-line node/no-missing-import
+import '@vite/env'
+
 // injected by the hmr plugin when served
-declare const __ROOT__: string
 declare const __BASE__: string
 declare const __HMR_PROTOCOL__: string
 declare const __HMR_HOSTNAME__: string
@@ -30,6 +39,12 @@ function warnFailedFetch(err: Error, path: string | string[]) {
   )
 }
 
+function cleanUrl(pathname: string): string {
+  const url = new URL(pathname, location.toString())
+  url.searchParams.delete('direct')
+  return url.pathname + url.search
+}
+
 // Listen for messages
 socket.addEventListener('message', async ({ data }) => {
   handleMessage(JSON.parse(data))
@@ -46,6 +61,7 @@ async function handleMessage(payload: HMRPayload) {
       setInterval(() => socket.send('ping'), __HMR_TIMEOUT__)
       break
     case 'update':
+      notifyListeners('vite:beforeUpdate', payload)
       // if this is the first update and there's already an error overlay, it
       // means the page opened with existing server compile error and the whole
       // module script failed to load (since one of the nested imports is 500).
@@ -63,36 +79,34 @@ async function handleMessage(payload: HMRPayload) {
         } else {
           // css-update
           // this is only sent when a css file referenced with <link> is updated
-          let { path, timestamp } = update
-          path = path.replace(/\?.*/, '')
+          const { path, timestamp } = update
+          const searchUrl = cleanUrl(path)
           // can't use querySelector with `[href*=]` here since the link may be
           // using relative paths so we need to use link.href to grab the full
           // URL for the include check.
-          const el = ([].slice.call(
-            document.querySelectorAll(`link`)
-          ) as HTMLLinkElement[]).find((e) => e.href.includes(path))
+          const el = Array.from(
+            document.querySelectorAll<HTMLLinkElement>('link')
+          ).find((e) => cleanUrl(e.href).includes(searchUrl))
           if (el) {
-            const newPath = `${path}${
-              path.includes('?') ? '&' : '?'
+            const newPath = `${base}${searchUrl.slice(1)}${
+              searchUrl.includes('?') ? '&' : '?'
             }t=${timestamp}`
             el.href = new URL(newPath, el.href).href
           }
-          console.log(`[vite] css hot updated: ${path}`)
+          console.log(`[vite] css hot updated: ${searchUrl}`)
         }
       })
       break
     case 'custom': {
-      const cbs = customListenersMap.get(payload.event)
-      if (cbs) {
-        cbs.forEach((cb) => cb(payload.data))
-      }
+      notifyListeners(payload.event as CustomEventName<any>, payload.data)
       break
     }
     case 'full-reload':
+      notifyListeners('vite:beforeFullReload', payload)
       if (payload.path && payload.path.endsWith('.html')) {
         // if html file is edited, only reload the page if the browser is
         // currently on that page.
-        const pagePath = location.pathname
+        const pagePath = decodeURI(location.pathname)
         const payloadPath = base + payload.path.slice(1)
         if (
           pagePath === payloadPath ||
@@ -106,6 +120,7 @@ async function handleMessage(payload: HMRPayload) {
       }
       break
     case 'prune':
+      notifyListeners('vite:beforePrune', payload)
       // After an HMR update, some modules are no longer imported on the page
       // but they may have left behind side effects that need to be cleaned up
       // (.e.g style injections)
@@ -118,11 +133,14 @@ async function handleMessage(payload: HMRPayload) {
       })
       break
     case 'error': {
+      notifyListeners('vite:error', payload)
       const err = payload.err
       if (enableOverlay) {
         createErrorOverlay(err)
       } else {
-        console.error(`[vite] Internal Server Error\n${err.stack}`)
+        console.error(
+          `[vite] Internal Server Error\n${err.message}\n${err.stack}`
+        )
       }
       break
     }
@@ -130,6 +148,27 @@ async function handleMessage(payload: HMRPayload) {
       const check: never = payload
       return check
     }
+  }
+}
+
+function notifyListeners(
+  event: 'vite:beforeUpdate',
+  payload: UpdatePayload
+): void
+function notifyListeners(event: 'vite:beforePrune', payload: PrunePayload): void
+function notifyListeners(
+  event: 'vite:beforeFullReload',
+  payload: FullReloadPayload
+): void
+function notifyListeners(event: 'vite:error', payload: ErrorPayload): void
+function notifyListeners<T extends string>(
+  event: CustomEventName<T>,
+  data: any
+): void
+function notifyListeners(event: string, data: any): void {
+  const cbs = customListenersMap.get(event)
+  if (cbs) {
+    cbs.forEach((cb) => cb(data))
   }
 }
 
@@ -241,8 +280,6 @@ export function removeStyle(id: string): void {
   if (style) {
     if (style instanceof CSSStyleSheet) {
       // @ts-ignore
-      const index = document.adoptedStyleSheets.indexOf(style)
-      // @ts-ignore
       document.adoptedStyleSheets = document.adoptedStyleSheets.filter(
         (s: CSSStyleSheet) => s !== style
       )
@@ -329,10 +366,10 @@ const hotModulesMap = new Map<string, HotModule>()
 const disposeMap = new Map<string, (data: any) => void | Promise<void>>()
 const pruneMap = new Map<string, (data: any) => void | Promise<void>>()
 const dataMap = new Map<string, any>()
-const customListenersMap = new Map<string, ((customData: any) => void)[]>()
+const customListenersMap = new Map<string, ((data: any) => void)[]>()
 const ctxToListenersMap = new Map<
   string,
-  Map<string, ((customData: any) => void)[]>
+  Map<string, ((data: any) => void)[]>
 >()
 
 // Just infer the return type for now
@@ -423,7 +460,7 @@ export const createHotContext = (ownerPath: string) => {
     },
 
     // custom events
-    on(event: string, cb: () => void) {
+    on: (event: string, cb: (data: any) => void) => {
       const addToMap = (map: Map<string, any[]>) => {
         const existing = map.get(event) || []
         existing.push(cb)
@@ -454,3 +491,5 @@ export function injectQuery(url: string, queryToInject: string): string {
     hash || ''
   }`
 }
+
+export { ErrorOverlay }

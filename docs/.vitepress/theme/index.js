@@ -9,7 +9,7 @@ export default {
   Layout() {
     return h(Theme.Layout, null, {
       'sidebar-bottom': () =>
-        h('div', { class: 'sponsors' }, [
+        h('div', { class: 'sponsors sidebar' }, [
           h(
             'a',
             {
@@ -19,7 +19,7 @@ export default {
             },
             [h('span', 'Sponsors')]
           ),
-          ...sponsors.map(({ href, src, name }) =>
+          ...sponsors.map(({ href, src, name, id }) =>
             h(
               'a',
               {
@@ -28,7 +28,7 @@ export default {
                 rel: 'noopener',
                 'aria-label': 'sponsor-img'
               },
-              [h('img', { src, alt: name })]
+              [h('img', { src, alt: name, id: `sponsor-${id}` })]
             )
           )
         ])

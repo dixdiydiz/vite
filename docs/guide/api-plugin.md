@@ -4,9 +4,20 @@ Vite plugins extends Rollup's well-designed plugin interface with a few extra Vi
 
 **It is recommended to go through [Rollup's plugin documentation](https://rollupjs.org/guide/en/#plugin-development) first before reading the sections below.**
 
+## Authoring a Plugin
+
+Vite strives to offer established patterns out of the box, so before creating a new plugin make sure that you check the [Features guide](https://vitejs.dev/guide/features) to see if your need is covered. Also review available community plugins, both in the form of a [compatible Rollup plugin](https://github.com/rollup/awesome) and [Vite Specific plugins](https://github.com/vitejs/awesome-vite#plugins)
+
+When creating a plugin, you can inline it in your `vite.config.js`. There is no need to create a new package for it. Once you see that a plugin was useful in your projects, consider sharing it to help others [in the ecosystem](https://chat.vitejs.dev).
+
+::: tip
+When learning, debugging, or authoring plugins we suggest including [vite-plugin-inspect](https://github.com/antfu/vite-plugin-inspect) in your project. It allows you to inspect the intermediate state of Vite plugins. After installing, you can visit `localhost:3000/__inspect/` to inspect the modules and transformation stack of your project. Check out install instructions in the [vite-plugin-inspect docs](https://github.com/antfu/vite-plugin-inspect).
+![vite-plugin-inspect](/images/vite-plugin-inspect.png)
+:::
+
 ## Conventions
 
-If the plugin doesn't use Vite specific hooks and can be implemented as a [Compatible Rollup Plugin](#rollup-plugin-compatibility), then it is recommended to use the [Rollup Plugin naming conventions](https://rollupjs.org/guide/en/#conventions)
+If the plugin doesn't use Vite specific hooks and can be implemented as a [Compatible Rollup Plugin](#rollup-plugin-compatibility), then it is recommended to use the [Rollup Plugin naming conventions](https://rollupjs.org/guide/en/#conventions).
 
 - Rollup Plugins should have a clear name with `rollup-plugin-` prefix.
 - Include `rollup-plugin` and `vite-plugin` keywords in package.json.
@@ -25,6 +36,10 @@ If your plugin is only going to work for a particular framework, its name should
 - `vite-plugin-react-` prefix for React Plugins
 - `vite-plugin-svelte-` prefix for Svelte Plugins
 
+Vite convention for virtual modules is to prefix the user-facing path with `virtual:`. If possible the plugin name should be used as a namespace to avoid collisions with other plugins in the ecosystem. For example, a `vite-plugin-posts` could ask users to import a `virtual:posts` or `virtual:posts/helpers` virtual modules to get build time information. Internally, plugins that use virtual modules should prefix the module ID with `\0` while resolving the id, a convention from the rollup ecosystem. This prevents other plugins from trying to process the id (like node resolution), and core features like sourcemaps can use this info to differentiate between virtual modules and regular files. `\0` is not a permitted char in import URLs so we have to replace them during import analysis. A `\0{id}` virtual id ends up encoded as `/@id/__x00__{id}` during dev in the browser. The id will be decoded back before entering the plugins pipeline, so this is not seen by plugins hooks code.
+
+Note that modules directly derived from a real file, as in the case of a script module in a Single File Component (like a .vue or .svelte SFC) don't need to follow this convention. SFCs generally generate a set of submodules when processed but the code in these can be mapped back to the filesystem. Using `\0` for these submodules would prevent sourcemaps from working correctly.
+
 ## Plugins config
 
 Users will add plugins to the project `devDependencies` and configure them using the `plugins` array option.
@@ -34,12 +49,12 @@ Users will add plugins to the project `devDependencies` and configure them using
 import vitePlugin from 'vite-plugin-feature'
 import rollupPlugin from 'rollup-plugin-feature'
 
-export default {
-  plugins: [ vitePlugin(), rollupPlugin() ]
-}
+export default defineConfig({
+  plugins: [vitePlugin(), rollupPlugin()]
+})
 ```
 
-Falsy plugins will be ignored, which can be used to easily activate or deactivate plugins. 
+Falsy plugins will be ignored, which can be used to easily activate or deactivate plugins.
 
 `plugins` also accept presets including several plugins as a single element. This is useful for complex features (like framework integration) that are implemented using several plugins. The array will be flattened internally.
 
@@ -49,22 +64,18 @@ import frameworkRefresh from 'vite-plugin-framework-refresh'
 import frameworkDevtools from 'vite-plugin-framework-devtools'
 
 export default function framework(config) {
-  return [
-    frameworkRefresh(config),
-    frameworkDevTools(config)
-  ]
+  return [frameworkRefresh(config), frameworkDevTools(config)]
 }
 ```
 
 ```js
 // vite.config.js
+import { defineConfig } from 'vite'
 import framework from 'vite-plugin-framework'
 
-export default {
-  plugins: [
-    framework()
-  ]
-}
+export default defineConfig({
+  plugins: [framework()]
+})
 ```
 
 ## Simple Examples
@@ -77,28 +88,29 @@ It is common convention to author a Vite/Rollup plugin as a factory function tha
 
 ```js
 export default function myPlugin() {
-  const virtualFileId = '@my-virtual-file'
+  const virtualModuleId = '@my-virtual-module'
+  const resolvedVirtualModuleId = '\0' + virtualModuleId
 
   return {
     name: 'my-plugin', // required, will show up in warnings and errors
     resolveId(id) {
-      if (id === virtualFileId) {
-        return virtualFileId
+      if (id === virtualModuleId) {
+        return resolvedVirtualModuleId
       }
     },
     load(id) {
-      if (id === virtualFileId) {
-        return `export const msg = "from virtual file"`
+      if (id === resolvedVirtualModuleId) {
+        return `export const msg = "from virtual module"`
       }
     }
   }
 }
 ```
 
-Which allows importing the file in JavaScript:
+Which allows importing the module in JavaScript:
 
 ```js
-import { msg } from '@my-virtual-file'
+import { msg } from '@my-virtual-module'
 
 console.log(msg)
 ```
@@ -155,11 +167,11 @@ Vite plugins can also provide hooks that serve Vite-specific purposes. These hoo
 ### `config`
 
 - **Type:** `(config: UserConfig, env: { mode: string, command: string }) => UserConfig | null | void`
-- **Kind:** `sync`, `sequential`
+- **Kind:** `async`, `sequential`
 
   Modify Vite config before it's resolved. The hook receives the raw user config (CLI options merged with config file) and the current config env which exposes the `mode` and `command` being used. It can return a partial config object that will be deeply merged into existing config, or directly mutate the config (if the default merging cannot achieve the desired result).
 
-  **Example**
+  **Example:**
 
   ```js
   // return partial config (recommended)
@@ -211,7 +223,7 @@ Vite plugins can also provide hooks that serve Vite-specific purposes. These hoo
       // use stored config in other hooks
       transform(code, id) {
         if (config.command === 'serve') {
-          // serve: plugin invoked by dev server
+          // dev: plugin invoked by dev server
         } else {
           // build: plugin invoked by Rollup
         }
@@ -219,6 +231,8 @@ Vite plugins can also provide hooks that serve Vite-specific purposes. These hoo
     }
   }
   ```
+
+  Note that the `command` value is `serve` in dev (in the cli `vite`, `vite dev`, and `vite serve` are aliases).
 
 ### `configureServer`
 
@@ -283,7 +297,7 @@ Vite plugins can also provide hooks that serve Vite-specific purposes. These hoo
 
 ### `transformIndexHtml`
 
-- **Type:** `IndexHtmlTransformHook | { enforce?: 'pre' | 'post' transform: IndexHtmlTransformHook }`
+- **Type:** `IndexHtmlTransformHook | { enforce?: 'pre' | 'post', transform: IndexHtmlTransformHook }`
 - **Kind:** `async`, `sequential`
 
   Dedicated hook for transforming `index.html`. The hook receives the current HTML string and a transform context. The context exposes the [`ViteDevServer`](./api-javascript#vitedevserver) instance during dev, and exposes the Rollup output bundle during build.
@@ -294,7 +308,7 @@ Vite plugins can also provide hooks that serve Vite-specific purposes. These hoo
   - An array of tag descriptor objects (`{ tag, attrs, children }`) to inject to the existing HTML. Each tag can also specify where it should be injected to (default is prepending to `<head>`)
   - An object containing both as `{ html, tags }`
 
-  **Basic Example**
+  **Basic Example:**
 
   ```js
   const htmlPlugin = () => {
@@ -418,11 +432,20 @@ function myPlugin() {
 }
 ```
 
+A function can also be used for more precise control:
+
+```js
+apply(config, { command }) {
+  // apply only on build but not for SSR
+  return command === 'build' && !config.build.ssr
+}
+```
+
 ## Rollup Plugin Compatibility
 
 A fair number of Rollup plugins will work directly as a Vite plugin (e.g. `@rollup/plugin-alias` or `@rollup/plugin-json`), but not all of them, since some plugin hooks do not make sense in an unbundled dev server context.
 
-In general, as long as a Rollup plugin fits the following criterias then it should just work as a Vite plugin:
+In general, as long as a Rollup plugin fits the following criteria then it should just work as a Vite plugin:
 
 - It doesn't use the [`moduleParsed`](https://rollupjs.org/guide/en/#moduleparsed) hook.
 - It doesn't have strong coupling between bundle-phase hooks and output-phase hooks.
@@ -434,8 +457,9 @@ You can also augment an existing Rollup plugin with Vite-only properties:
 ```js
 // vite.config.js
 import example from 'rollup-plugin-example'
+import { defineConfig } from 'vite'
 
-export default {
+export default defineConfig({
   plugins: [
     {
       ...example(),
@@ -443,7 +467,7 @@ export default {
       apply: 'build'
     }
   ]
-}
+})
 ```
 
 Check out [Vite Rollup Plugins](https://vite-rollup-plugins.patak.dev) for a list of compatible official Rollup plugins with usage instructions.

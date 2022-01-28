@@ -22,9 +22,9 @@ Vite caches dependency requests via HTTP headers, so if you wish to locally edit
 
 ## Hot Module Replacement
 
-Vite provides an [HMR API](./api-hmr) over native ESM. Frameworks with HMR capabilities can leverage the API to provide instant, precise updates without reloading the page or blowing away application state. Vite provides first-party HMR integrations for [Vue Single File Components](https://github.com/vitejs/vite/tree/main/packages/plugin-vue) and [React Fast Refresh](https://github.com/vitejs/vite/tree/main/packages/plugin-react-refresh). There are also official integrations for Preact via [@prefresh/vite](https://github.com/JoviDeCroock/prefresh/tree/main/packages/vite).
+Vite provides an [HMR API](./api-hmr) over native ESM. Frameworks with HMR capabilities can leverage the API to provide instant, precise updates without reloading the page or blowing away application state. Vite provides first-party HMR integrations for [Vue Single File Components](https://github.com/vitejs/vite/tree/main/packages/plugin-vue) and [React Fast Refresh](https://github.com/vitejs/vite/tree/main/packages/plugin-react). There are also official integrations for Preact via [@prefresh/vite](https://github.com/JoviDeCroock/prefresh/tree/main/packages/vite).
 
-Note you don't need to manually set these up - when you [create an app via `@vitejs/create-app`](./), the selected templates would have these pre-configured for you already.
+Note you don't need to manually set these up - when you [create an app via `create-vite`](./), the selected templates would have these pre-configured for you already.
 
 ## TypeScript
 
@@ -34,11 +34,57 @@ Vite only performs transpilation on `.ts` files and does **NOT** perform type ch
 
 Vite uses [esbuild](https://github.com/evanw/esbuild) to transpile TypeScript into JavaScript which is about 20~30x faster than vanilla `tsc`, and HMR updates can reflect in the browser in under 50ms.
 
-Note that because `esbuild` only performs transpilation without type information, it doesn't support certain features like const enum and implicit type-only imports. You must set `"isolatedModules": true` in your `tsconfig.json` under `compilerOptions` so that TS will warn you against the features that do not work with isolated transpilation.
+Use the [Type-Only Imports and Export](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-3-8.html#type-only-imports-and-export) syntax to avoid potential problems like type-only imports being incorrectly bundled. for example:
+
+```ts
+import type { T } from 'only/types'
+export type { T }
+```
+
+### TypeScript Compiler Options
+
+Some configuration fields under `compilerOptions` in `tsconfig.json` require special attention.
+
+#### `isolatedModules`
+
+Should be set to `true`.
+
+It is because `esbuild` only performs transpilation without type information, it doesn't support certain features like const enum and implicit type-only imports.
+
+You must set `"isolatedModules": true` in your `tsconfig.json` under `compilerOptions`, so that TS will warn you against the features that do not work with isolated transpilation.
+
+#### `useDefineForClassFields`
+
+Starting from Vite 2.5.0, the default value will be `true` if the TypeScript target is `ESNext`. It is consistent with the [behavior of `tsc` 4.3.2 and later](https://github.com/microsoft/TypeScript/pull/42663). It is also the standard ECMAScript runtime behavior.
+
+But it may be counter-intuitive for those coming from other programming languages or older versions of TypeScript.
+You can read more about the transition in the [TypeScript 3.7 release notes](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-3-7.html#the-usedefineforclassfields-flag-and-the-declare-property-modifier).
+
+If you are using a library that heavily relies on class fields, please be careful about the library's intended usage of it.
+
+Most libraries expect `"useDefineForClassFields": true`, such as [MobX](https://mobx.js.org/installation.html#use-spec-compliant-transpilation-for-class-properties), [Vue Class Components 8.x](https://github.com/vuejs/vue-class-component/issues/465), etc.
+
+But a few libraries haven't transitioned to this new default yet, including [`lit-element`](https://github.com/lit/lit-element/issues/1030). Please explicitly set `useDefineForClassFields` to `false` in these cases.
+
+#### Other Compiler Options Affecting the Build Result
+
+- [`extends`](https://www.typescriptlang.org/tsconfig#extends)
+- [`importsNotUsedAsValues`](https://www.typescriptlang.org/tsconfig#importsNotUsedAsValues)
+- [`preserveValueImports`](https://www.typescriptlang.org/tsconfig#preserveValueImports)
+- [`jsxFactory`](https://www.typescriptlang.org/tsconfig#jsxFactory)
+- [`jsxFragmentFactory`](https://www.typescriptlang.org/tsconfig#jsxFragmentFactory)
+
+If migrating your codebase to `"isolatedModules": true` is an unsurmountable effort, you may be able to get around it with a third-party plugin such as [rollup-plugin-friendly-type-imports](https://www.npmjs.com/package/rollup-plugin-friendly-type-imports). However, this approach is not officially supported by Vite.
 
 ### Client Types
 
-Vite's default types are for its Node.js API. To shim the environment of client side code in a Vite application, add `vite/client` to `compilerOptions.types` of your `tsconfig`:
+Vite's default types are for its Node.js API. To shim the environment of client side code in a Vite application, add a `d.ts` declaration file:
+
+```typescript
+/// <reference types="vite/client" />
+```
+
+Also, you can add `vite/client` to `compilerOptions.types` of your `tsconfig`:
 
 ```json
 {
@@ -64,7 +110,7 @@ Vite provides first-class Vue support:
 
 ## JSX
 
-`.jsx` and `.tsx` files are also supported out of the box. JSX transpilation is also handled via [ESBuild](https://esbuild.github.io), and defaults to the React 16 flavor. React 17 style JSX support in ESBuild is tracked [here](https://github.com/evanw/esbuild/issues/334).
+`.jsx` and `.tsx` files are also supported out of the box. JSX transpilation is also handled via [esbuild](https://esbuild.github.io), and defaults to the React 16 flavor. React 17 style JSX support in esbuild is tracked [here](https://github.com/evanw/esbuild/issues/334).
 
 Vue users should use the official [@vitejs/plugin-vue-jsx](https://github.com/vitejs/vite/tree/main/packages/plugin-vue-jsx) plugin, which provides Vue 3 specific features including HMR, global component resolving, directives and slots.
 
@@ -72,25 +118,29 @@ If not using JSX with React or Vue, custom `jsxFactory` and `jsxFragment` can be
 
 ```js
 // vite.config.js
-export default {
+import { defineConfig } from 'vite'
+
+export default defineConfig({
   esbuild: {
     jsxFactory: 'h',
     jsxFragment: 'Fragment'
   }
-}
+})
 ```
 
-More details in [ESBuild docs](https://esbuild.github.io/content-types/#jsx).
+More details in [esbuild docs](https://esbuild.github.io/content-types/#jsx).
 
 You can inject the JSX helpers using `jsxInject` (which is a Vite-only option) to avoid manual imports:
 
 ```js
 // vite.config.js
-export default {
+import { defineConfig } from 'vite'
+
+export default defineConfig({
   esbuild: {
     jsxInject: `import React from 'react'`
   }
-}
+})
 ```
 
 ## CSS
@@ -141,13 +191,13 @@ That said, Vite does provide built-in support for `.scss`, `.sass`, `.less`, `.s
 
 ```bash
 # .scss and .sass
-npm install -D sass
+npm add -D sass
 
 # .less
-npm install -D less
+npm add -D less
 
 # .styl and .stylus
-npm install -D stylus
+npm add -D stylus
 ```
 
 If using Vue single file components, this also automatically enables `<style lang="sass">` et al.
@@ -198,7 +248,7 @@ JSON files can be directly imported - named imports are also supported:
 ```js
 // import the entire object
 import json from './example.json'
-// import a root field as named exports - helps with treeshaking!
+// import a root field as named exports - helps with tree-shaking!
 import { field } from './example.json'
 ```
 
@@ -253,8 +303,10 @@ Note that:
 - This is a Vite-only feature and is not a web or ES standard.
 - The glob patterns are treated like import specifiers: they must be either relative (start with `./`) or absolute (start with `/`, resolved relative to project root).
 - The glob matching is done via `fast-glob` - check out its documentation for [supported glob patterns](https://github.com/mrmlnc/fast-glob#pattern-syntax).
+- You should also be aware that glob imports do not accept variables, you need to directly pass the string pattern.
+- The glob patterns cannot contain the same quote string (i.e. `'`, `"`, `` ` ``) as outer quotes, e.g. `'/Tom\'s files/**'`, use `"/Tom's files/**"` instead.
 
-## Web Assembly
+## WebAssembly
 
 Pre-compiled `.wasm` files can be directly imported - the default export will be an initialization function that returns a Promise of the exports object of the wasm instance:
 
@@ -284,7 +336,7 @@ In the production build, `.wasm` files smaller than `assetInlineLimit` will be i
 
 ## Web Workers
 
-A web worker script can be directly imported by appending `?worker` to the import request. The default export will be a custom worker constructor:
+A web worker script can be directly imported by appending `?worker` or `?sharedworker` to the import request. The default export will be a custom worker constructor:
 
 ```js
 import MyWorker from './worker?worker'
@@ -306,7 +358,7 @@ import MyWorker from './worker?worker&inline'
 
 ### CSS Code Splitting
 
-Vite automatically extracts the CSS used by modules in an async chunk and generate a separate file for it. The CSS file is automatically loaded via a `<link>` tag when the associated async chunk is loaded, and the async chunk is guaranteed to only be evaluated after the CSS is loaded to avoid [FOUC](https://en.wikipedia.org/wiki/Flash_of_unstyled_content#:~:text=A%20flash%20of%20unstyled%20content,before%20all%20information%20is%20retrieved.).
+Vite automatically extracts the CSS used by modules in an async chunk and generates a separate file for it. The CSS file is automatically loaded via a `<link>` tag when the associated async chunk is loaded, and the async chunk is guaranteed to only be evaluated after the CSS is loaded to avoid [FOUC](https://en.wikipedia.org/wiki/Flash_of_unstyled_content#:~:text=A%20flash%20of%20unstyled%20content,before%20all%20information%20is%20retrieved.).
 
 If you'd rather have all the CSS extracted into a single file, you can disable CSS code splitting by setting [`build.cssCodeSplit`](/config/#build-csscodesplit) to `false`.
 

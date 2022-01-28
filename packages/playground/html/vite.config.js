@@ -8,7 +8,22 @@ module.exports = {
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html'),
-        nested: resolve(__dirname, 'nested/index.html')
+        nested: resolve(__dirname, 'nested/index.html'),
+        scriptAsync: resolve(__dirname, 'scriptAsync.html'),
+        scriptMixed: resolve(__dirname, 'scriptMixed.html'),
+        emptyAttr: resolve(__dirname, 'emptyAttr.html'),
+        link: resolve(__dirname, 'link.html'),
+        'link/target': resolve(__dirname, 'index.html'),
+        zeroJS: resolve(__dirname, 'zeroJS.html'),
+        noHead: resolve(__dirname, 'noHead.html'),
+        noBody: resolve(__dirname, 'noBody.html'),
+        inline1: resolve(__dirname, 'inline/shared-1.html'),
+        inline2: resolve(__dirname, 'inline/shared-2.html'),
+        inline3: resolve(__dirname, 'inline/unique.html'),
+        unicodePath: resolve(
+          __dirname,
+          'unicode-path/中文-にほんご-한글-🌕🌖🌗/index.html'
+        )
       }
     }
   },
@@ -18,21 +33,25 @@ module.exports = {
       name: 'pre-transform',
       transformIndexHtml: {
         enforce: 'pre',
-        transform(html) {
+        transform(html, { filename }) {
           if (html.includes('/@vite/client')) {
             throw new Error('pre transform applied at wrong time!')
           }
-          return `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{{ title }}</title>
-</head>
-<body>
+          const head = `
+  <head lang="en">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ title }}</title>
+  </head>`
+          return `<!DOCTYPE html>
+<html lang="en">${filename.includes('noHead') ? '' : head}
+${
+  filename.includes('noBody')
+    ? html
+    : `<body>
   ${html}
-</body>
+</body>`
+}
 </html>
   `
         }
@@ -137,6 +156,18 @@ module.exports = {
             injectTo: 'body-prepend'
           }
         ]
+      }
+    },
+    {
+      // Emulate rollup-plugin-string
+      name: 'import-as-string-module',
+      transform(code, id) {
+        if (id.endsWith('importAsString.html')) {
+          return {
+            code: `export default ${JSON.stringify(code)}`,
+            map: { mappings: '' }
+          }
+        }
       }
     }
   ]

@@ -45,9 +45,28 @@ const allResult = {
   }
 }
 
+const nodeModulesResult = {
+  '/dir/node_modules/hoge.js': { msg: 'hoge' }
+}
+
+const rawResult = {
+  '/dir/baz.json': {
+    msg: 'baz'
+  }
+}
+
 test('should work', async () => {
   expect(await page.textContent('.result')).toBe(
     JSON.stringify(allResult, null, 2)
+  )
+  expect(await page.textContent('.result-node_modules')).toBe(
+    JSON.stringify(nodeModulesResult, null, 2)
+  )
+})
+
+test('import glob raw', async () => {
+  expect(await page.textContent('.globraw')).toBe(
+    JSON.stringify(rawResult, null, 2)
   )
 })
 
@@ -59,7 +78,13 @@ if (!isBuild) {
       JSON.stringify(
         {
           '/dir/a.js': {},
-          ...allResult
+          ...allResult,
+          '/dir/index.js': {
+            modules: {
+              './a.js': {},
+              ...allResult['/dir/index.js'].modules
+            }
+          }
         },
         null,
         2
@@ -75,7 +100,15 @@ if (!isBuild) {
           '/dir/a.js': {
             msg: 'a'
           },
-          ...allResult
+          ...allResult,
+          '/dir/index.js': {
+            modules: {
+              './a.js': {
+                msg: 'a'
+              },
+              ...allResult['/dir/index.js'].modules
+            }
+          }
         },
         null,
         2

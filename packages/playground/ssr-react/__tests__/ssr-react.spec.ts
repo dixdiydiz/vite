@@ -1,8 +1,17 @@
-import { editFile, getColor, isBuild, untilUpdated } from '../../testUtils'
+import { editFile, untilUpdated } from '../../testUtils'
 import { port } from './serve'
 import fetch from 'node-fetch'
 
 const url = `http://localhost:${port}`
+
+test('/env', async () => {
+  await page.goto(url + '/env')
+  expect(await page.textContent('h1')).toMatch('default message here')
+
+  // raw http request
+  const envHtml = await (await fetch(url + '/env')).text()
+  expect(envHtml).toMatch('API_KEY_qwertyuiop')
+})
 
 test('/about', async () => {
   await page.goto(url + '/about')
@@ -45,4 +54,11 @@ test('client navigation', async () => {
     code.replace('<h1>About', '<h1>changed')
   )
   await untilUpdated(() => page.textContent('h1'), 'changed')
+})
+
+test(`circular dependecies modules doesn't throw`, async () => {
+  await page.goto(url)
+  expect(await page.textContent('.circ-dep-init')).toMatch(
+    'circ-dep-init-a circ-dep-init-b'
+  )
 })

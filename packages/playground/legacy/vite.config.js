@@ -10,8 +10,18 @@ module.exports = {
   ],
 
   build: {
-    // make tests faster
-    minify: false
+    manifest: true,
+    rollupOptions: {
+      output: {
+        chunkFileNames(chunkInfo) {
+          if (chunkInfo.name === 'immutable-chunk') {
+            return `assets/${chunkInfo.name}.js`
+          }
+
+          return `assets/chunk-[name].[hash].js`
+        }
+      }
+    }
   },
 
   // special test only hook

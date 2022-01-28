@@ -1,6 +1,6 @@
-import chalk from 'chalk'
+import colors from 'picocolors'
 import { optimizeDeps } from '.'
-import { ViteDevServer } from '..'
+import type { ViteDevServer } from '..'
 import { resolveSSRExternal } from '../ssr/ssrExternal'
 
 /**
@@ -11,20 +11,20 @@ const debounceMs = 100
 
 export function createMissingImporterRegisterFn(
   server: ViteDevServer
-): (id: string, resolved: string) => void {
+): (id: string, resolved: string, ssr?: boolean) => void {
   const { logger } = server.config
   let knownOptimized = server._optimizeDepsMetadata!.optimized
   let currentMissing: Record<string, string> = {}
-  let handle: NodeJS.Timeout
+  let handle: NodeJS.Timeout | undefined
 
   let pendingResolve: (() => void) | null = null
 
-  async function rerun() {
+  async function rerun(ssr: boolean | undefined) {
     const newDeps = currentMissing
     currentMissing = {}
 
     logger.info(
-      chalk.yellow(
+      colors.yellow(
         `new dependencies found: ${Object.keys(newDeps).join(
           ', '
         )}, updating...`
@@ -48,29 +48,34 @@ export function createMissingImporterRegisterFn(
         server.config,
         true,
         false,
-        newDeps
+        newDeps,
+        ssr
       ))
       knownOptimized = newData!.optimized
 
       // update ssr externals
-      server._ssrExternals = resolveSSRExternal(
-        server.config,
-        Object.keys(knownOptimized)
-      )
+      if (ssr) {
+        server._ssrExternals = resolveSSRExternal(
+          server.config,
+          Object.keys(knownOptimized)
+        )
+      }
 
-      logger.info(
-        chalk.greenBright(`✨ dependencies updated, reloading page...`),
-        { timestamp: true }
-      )
+      logger.info(colors.green(`✨ dependencies updated, reloading page...`), {
+        timestamp: true
+      })
     } catch (e) {
       logger.error(
-        chalk.red(`error while updating dependencies:\n${e.stack}`),
-        { timestamp: true }
+        colors.red(`error while updating dependencies:\n${e.stack}`),
+        { timestamp: true, error: e }
       )
     } finally {
       server._isRunningOptimizer = false
-      pendingResolve && pendingResolve()
-      server._pendingReload = pendingResolve = null
+      if (!handle) {
+        // No other rerun() pending so resolve and let pending requests proceed
+        pendingResolve && pendingResolve()
+        server._pendingReload = pendingResolve = null
+      }
     }
 
     // Cached transform results have stale imports (resolved to
@@ -84,14 +89,23 @@ export function createMissingImporterRegisterFn(
     })
   }
 
-  return function registerMissingImport(id: string, resolved: string) {
+  return function registerMissingImport(
+    id: string,
+    resolved: string,
+    ssr?: boolean
+  ) {
     if (!knownOptimized[id]) {
       currentMissing[id] = resolved
       if (handle) clearTimeout(handle)
-      handle = setTimeout(rerun, debounceMs)
-      server._pendingReload = new Promise((r) => {
-        pendingResolve = r
-      })
+      handle = setTimeout(() => {
+        handle = undefined
+        rerun(ssr)
+      }, debounceMs)
+      if (!server._pendingReload) {
+        server._pendingReload = new Promise((r) => {
+          pendingResolve = r
+        })
+      }
     }
   }
 }

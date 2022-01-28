@@ -1,7 +1,7 @@
 <template>
   <div class="comments"><!--hello--></div>
   <h1>Vue SFCs</h1>
-  <pre>{{ time }}</pre>
+  <pre>{{ time as string }}</pre>
   <div class="hmr-block">
     <Hmr />
   </div>
@@ -14,7 +14,13 @@
   <Slotted>
     <div class="slotted">this should be red</div>
   </Slotted>
-  <ScanDep/>
+  <ScanDep />
+  <Suspense>
+    <AsyncComponent />
+  </Suspense>
+  <ReactivityTransform :foo="time" />
+  <SetupImportTemplate />
+  <ExternalStyleCss />
 </template>
 
 <script setup lang="ts">
@@ -27,6 +33,10 @@ import CustomBlock from './CustomBlock.vue'
 import SrcImport from './src-import/SrcImport.vue'
 import Slotted from './Slotted.vue'
 import ScanDep from './ScanDep.vue'
+import AsyncComponent from './AsyncComponent.vue'
+import ReactivityTransform from './ReactivityTransform.vue'
+import SetupImportTemplate from './setup-import-template/SetupImportTemplate.vue'
+import ExternalStyleCss from './ExternalStyleCss.vue'
 
 import { ref } from 'vue'
 

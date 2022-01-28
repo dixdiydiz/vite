@@ -1,6 +1,6 @@
 import path from 'path'
-import { ViteDevServer } from '..'
-import { Connect } from 'types/connect'
+import type { ViteDevServer } from '..'
+import type { Connect } from 'types/connect'
 import {
   cleanUrl,
   createDebugger,
@@ -16,13 +16,17 @@ import {
 import { send } from '../send'
 import { transformRequest } from '../transformRequest'
 import { isHTMLProxy } from '../../plugins/html'
-import chalk from 'chalk'
+import colors from 'picocolors'
 import {
   CLIENT_PUBLIC_PATH,
   DEP_VERSION_RE,
   NULL_BYTE_PLACEHOLDER
 } from '../../constants'
-import { isCSSRequest, isDirectCSSRequest } from '../../plugins/css'
+import {
+  isCSSRequest,
+  isDirectCSSRequest,
+  isDirectRequest
+} from '../../plugins/css'
 
 /**
  * Time (ms) Vite has to full-reload the page before returning
@@ -44,21 +48,17 @@ export function transformMiddleware(
   } = server
 
   // determine the url prefix of files inside cache directory
-  let cacheDirPrefix: string | undefined
-  if (cacheDir) {
-    const cacheDirRelative = normalizePath(path.relative(root, cacheDir))
-    if (cacheDirRelative.startsWith('../')) {
-      // if the cache directory is outside root, the url prefix would be something
+  const cacheDirRelative = normalizePath(path.relative(root, cacheDir))
+  const cacheDirPrefix = cacheDirRelative.startsWith('../')
+    ? // if the cache directory is outside root, the url prefix would be something
       // like '/@fs/absolute/path/to/node_modules/.vite'
-      cacheDirPrefix = `/@fs/${normalizePath(cacheDir).replace(/^\//, '')}`
-    } else {
-      // if the cache directory is inside root, the url prefix would be something
+      `/@fs/${normalizePath(cacheDir).replace(/^\//, '')}`
+    : // if the cache directory is inside root, the url prefix would be something
       // like '/node_modules/.vite'
-      cacheDirPrefix = `/${cacheDirRelative}`
-    }
-  }
+      `/${cacheDirRelative}`
 
-  return async (req, res, next) => {
+  // Keep the named function. The name is visible in debug logs via `DEBUG=connect:dispatcher ...`
+  return async function viteTransformMiddleware(req, res, next) {
     if (req.method !== 'GET' || knownIgnoreList.has(req.url!)) {
       return next()
     }
@@ -69,37 +69,38 @@ export function transformMiddleware(
       !req.url?.startsWith(CLIENT_PUBLIC_PATH) &&
       !req.url?.includes('vite/dist/client')
     ) {
-      // missing dep pending reload, hold request until reload happens
-      server._pendingReload.then(() =>
-        // If the refresh has not happened after timeout, Vite considers
-        // something unexpected has happened. In this case, Vite
-        // returns an empty response that will error.
-        setTimeout(() => {
+      try {
+        // missing dep pending reload, hold request until reload happens
+        await Promise.race([
+          server._pendingReload,
+          // If the refresh has not happened after timeout, Vite considers
+          // something unexpected has happened. In this case, Vite
+          // returns an empty response that will error.
+          new Promise((_, reject) =>
+            setTimeout(reject, NEW_DEPENDENCY_BUILD_TIMEOUT)
+          )
+        ])
+      } catch {
+        // Don't do anything if response has already been sent
+        if (!res.writableEnded) {
           // status code request timeout
           res.statusCode = 408
           res.end(
             `<h1>[vite] Something unexpected happened while optimizing "${req.url}"<h1>` +
               `<p>The current page should have reloaded by now</p>`
           )
-        }, NEW_DEPENDENCY_BUILD_TIMEOUT)
-      )
-      return
-    }
-
-    let url
-    try {
-      url = removeTimestampQuery(req.url!).replace(NULL_BYTE_PLACEHOLDER, '\0')
-    } catch (err) {
-      // if it starts with %PUBLIC%, someone's migrating from something
-      // like create-react-app
-      let errorMessage
-      if (req.url?.startsWith('/%PUBLIC')) {
-        errorMessage = `index.html shouldn't include environment variables like %PUBLIC_URL%, see https://vitejs.dev/guide/#index-html-and-project-root for more information`
-      } else {
-        errorMessage = `Vite encountered a suspiciously malformed request ${req.url}`
+        }
+        return
       }
-      next(new Error(errorMessage))
-      return
+    }
+    let url: string
+    try {
+      url = decodeURI(removeTimestampQuery(req.url!)).replace(
+        NULL_BYTE_PLACEHOLDER,
+        '\0'
+      )
+    } catch (e) {
+      return next(e)
     }
 
     const withoutQuery = cleanUrl(url)
@@ -109,25 +110,33 @@ export function transformMiddleware(
       // since we generate source map references, handle those requests here
       if (isSourceMap) {
         const originalUrl = url.replace(/\.map($|\?)/, '$1')
-        const map = (await moduleGraph.getModuleByUrl(originalUrl))
+        const map = (await moduleGraph.getModuleByUrl(originalUrl, false))
           ?.transformResult?.map
         if (map) {
-          return send(req, res, JSON.stringify(map), 'json')
+          return send(req, res, JSON.stringify(map), 'json', {
+            headers: server.config.server.headers
+          })
         } else {
           return next()
         }
       }
 
-      // warn explicit /public/ paths
-      if (url.startsWith('/public/')) {
-        logger.warn(
-          chalk.yellow(
-            `files in the public directory are served at the root path.\n` +
-              `Instead of ${chalk.cyan(url)}, use ${chalk.cyan(
-                url.replace(/^\/public\//, '/')
-              )}.`
+      // check if public dir is inside root dir
+      const publicDir = normalizePath(server.config.publicDir)
+      const rootDir = normalizePath(server.config.root)
+      if (publicDir.startsWith(rootDir)) {
+        const publicPath = `${publicDir.slice(rootDir.length)}/`
+        // warn explicit public paths
+        if (url.startsWith(publicPath)) {
+          logger.warn(
+            colors.yellow(
+              `files in the public directory are served at the root path.\n` +
+                `Instead of ${colors.cyan(url)}, use ${colors.cyan(
+                  url.replace(publicPath, '/')
+                )}.`
+            )
           )
-        )
+        }
       }
 
       if (
@@ -144,7 +153,11 @@ export function transformMiddleware(
 
         // for CSS, we need to differentiate between normal CSS requests and
         // imports
-        if (isCSSRequest(url) && req.headers.accept?.includes('text/css')) {
+        if (
+          isCSSRequest(url) &&
+          !isDirectRequest(url) &&
+          req.headers.accept?.includes('text/css')
+        ) {
           url = injectQuery(url, 'direct')
         }
 
@@ -152,8 +165,8 @@ export function transformMiddleware(
         const ifNoneMatch = req.headers['if-none-match']
         if (
           ifNoneMatch &&
-          (await moduleGraph.getModuleByUrl(url))?.transformResult?.etag ===
-            ifNoneMatch
+          (await moduleGraph.getModuleByUrl(url, false))?.transformResult
+            ?.etag === ifNoneMatch
         ) {
           isDebug && debugCache(`[304] ${prettifyUrl(url, root)}`)
           res.statusCode = 304
@@ -169,16 +182,13 @@ export function transformMiddleware(
           const isDep =
             DEP_VERSION_RE.test(url) ||
             (cacheDirPrefix && url.startsWith(cacheDirPrefix))
-          return send(
-            req,
-            res,
-            result.code,
-            type,
-            result.etag,
+          return send(req, res, result.code, type, {
+            etag: result.etag,
             // allow browser to cache npm deps!
-            isDep ? 'max-age=31536000,immutable' : 'no-cache',
-            result.map
-          )
+            cacheControl: isDep ? 'max-age=31536000,immutable' : 'no-cache',
+            headers: server.config.server.headers,
+            map: result.map
+          })
         }
       }
     } catch (e) {

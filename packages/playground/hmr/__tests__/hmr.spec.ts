@@ -20,6 +20,7 @@ if (!isBuild) {
     await untilUpdated(() => el.textContent(), '2')
 
     expect(browserLogs).toMatchObject([
+      '>>> vite:beforeUpdate -- update',
       'foo was: 1',
       '(self-accepting 1) foo is now: 2',
       '(self-accepting 2) foo is now: 2',
@@ -31,6 +32,7 @@ if (!isBuild) {
     await untilUpdated(() => el.textContent(), '3')
 
     expect(browserLogs).toMatchObject([
+      '>>> vite:beforeUpdate -- update',
       'foo was: 2',
       '(self-accepting 1) foo is now: 3',
       '(self-accepting 2) foo is now: 3',
@@ -48,6 +50,7 @@ if (!isBuild) {
     await untilUpdated(() => el.textContent(), '2')
 
     expect(browserLogs).toMatchObject([
+      '>>> vite:beforeUpdate -- update',
       '(dep) foo was: 1',
       '(dep) foo from dispose: 1',
       '(single dep) foo is now: 2',
@@ -64,6 +67,7 @@ if (!isBuild) {
     await untilUpdated(() => el.textContent(), '3')
 
     expect(browserLogs).toMatchObject([
+      '>>> vite:beforeUpdate -- update',
       '(dep) foo was: 2',
       '(dep) foo from dispose: 2',
       '(single dep) foo is now: 3',
@@ -84,6 +88,7 @@ if (!isBuild) {
     await untilUpdated(() => el.textContent(), '2')
 
     expect(browserLogs).toMatchObject([
+      '>>> vite:beforeUpdate -- update',
       '(dep) foo was: 3',
       '(dep) foo from dispose: 3',
       '(single dep) foo is now: 3',
@@ -100,6 +105,7 @@ if (!isBuild) {
     await untilUpdated(() => el.textContent(), '3')
 
     expect(browserLogs).toMatchObject([
+      '>>> vite:beforeUpdate -- update',
       '(dep) foo was: 3',
       '(dep) foo from dispose: 3',
       '(single dep) foo is now: 3',
@@ -115,5 +121,38 @@ if (!isBuild) {
     const el = await page.$('.custom')
     editFile('customFile.js', (code) => code.replace('custom', 'edited'))
     await untilUpdated(() => el.textContent(), 'edited')
+  })
+
+  test('full-reload encodeURI path', async () => {
+    await page.goto(
+      viteTestUrl + '/unicode-path/中文-にほんご-한글-🌕🌖🌗/index.html'
+    )
+    let el = await page.$('#app')
+    expect(await el.textContent()).toBe('title')
+    await editFile(
+      'unicode-path/中文-にほんご-한글-🌕🌖🌗/index.html',
+      (code) => code.replace('title', 'title2')
+    )
+    await page.waitForEvent('load')
+    await untilUpdated(
+      async () => (await page.$('#app')).textContent(),
+      'title2'
+    )
+  })
+
+  test('CSS update preserves query params', async () => {
+    await page.goto(viteTestUrl)
+
+    editFile('global.css', (code) => code.replace('white', 'tomato'))
+
+    const elprev = await page.$('.css-prev')
+    const elpost = await page.$('.css-post')
+    await untilUpdated(() => elprev.textContent(), 'param=required')
+    await untilUpdated(() => elpost.textContent(), 'param=required')
+    const textprev = await elprev.textContent()
+    const textpost = await elpost.textContent()
+    expect(textprev).not.toBe(textpost)
+    expect(textprev).not.toMatch('direct')
+    expect(textpost).not.toMatch('direct')
   })
 }

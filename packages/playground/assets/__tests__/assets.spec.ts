@@ -6,7 +6,9 @@ import {
   isBuild,
   listAssets,
   readManifest,
-  readFile
+  readFile,
+  editFile,
+  notifyRebuildComplete
 } from '../../testUtils'
 
 const assetMatch = isBuild
@@ -55,6 +57,12 @@ describe('raw references from /public', () => {
   })
 })
 
+test('import-expression from simple script', async () => {
+  expect(await page.textContent('.import-expression')).toMatch(
+    '[success][success]'
+  )
+})
+
 describe('asset imports from js', () => {
   test('relative', async () => {
     expect(await page.textContent('.asset-import-relative')).toMatch(assetMatch)
@@ -83,14 +91,14 @@ describe('css url() references', () => {
   })
 
   test('image-set relative', async () => {
-    let imageSet = await getBg('.css-image-set-relative')
+    const imageSet = await getBg('.css-image-set-relative')
     imageSet.split(', ').forEach((s) => {
       expect(s).toMatch(assetMatch)
     })
   })
 
   test('image-set without the url() call', async () => {
-    let imageSet = await getBg('.css-image-set-without-url-call')
+    const imageSet = await getBg('.css-image-set-without-url-call')
     imageSet.split(', ').forEach((s) => {
       expect(s).toMatch(assetMatch)
     })
@@ -181,6 +189,45 @@ test('?url import', async () => {
   )
 })
 
+describe('unicode url', () => {
+  test('from js import', async () => {
+    const src = readFile('テスト-測試-white space.js')
+    expect(await page.textContent('.unicode-url')).toMatch(
+      isBuild
+        ? `data:application/javascript;base64,${Buffer.from(src).toString(
+            'base64'
+          )}`
+        : `/foo/テスト-測試-white space.js`
+    )
+  })
+})
+
+describe('encodeURI', () => {
+  if (isBuild) {
+    test('img src with encodeURI', async () => {
+      const img = await page.$('.encodeURI')
+      expect(
+        await (
+          await img.getAttribute('src')
+        ).startsWith('data:image/png;base64')
+      ).toBe(true)
+    })
+  }
+})
+
+test('new URL(..., import.meta.url)', async () => {
+  expect(await page.textContent('.import-meta-url')).toMatch(assetMatch)
+})
+
+test('new URL(`${dynamic}`, import.meta.url)', async () => {
+  expect(await page.textContent('.dynamic-import-meta-url-1')).toMatch(
+    isBuild ? 'data:image/png;base64' : '/foo/nested/icon.png'
+  )
+  expect(await page.textContent('.dynamic-import-meta-url-2')).toMatch(
+    assetMatch
+  )
+})
+
 if (isBuild) {
   test('manifest', async () => {
     const manifest = readManifest('foo')
@@ -195,3 +242,15 @@ if (isBuild) {
     }
   })
 }
+describe('css and assets in css in build watch', () => {
+  if (isBuild) {
+    test('css will not be lost and css does not contain undefined', async () => {
+      editFile('index.html', (code) => code.replace('Assets', 'assets'), true)
+      await notifyRebuildComplete(watcher)
+      const cssFile = findAssetFile(/index\.\w+\.css$/, 'foo')
+      expect(cssFile).not.toBe('')
+      expect(cssFile).not.toMatch(/undefined/)
+      watcher?.close()
+    })
+  }
+})

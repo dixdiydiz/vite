@@ -2,8 +2,9 @@
 const babel = require('@babel/core')
 const jsx = require('@vue/babel-plugin-jsx')
 const importMeta = require('@babel/plugin-syntax-import-meta')
-const { createFilter } = require('@rollup/pluginutils')
+const { createFilter, normalizePath } = require('@rollup/pluginutils')
 const hash = require('hash-sum')
+const path = require('path')
 
 const ssrRegisterHelperId = '/__vue-jsx-ssr-register-helper'
 const ssrRegisterHelperCode =
@@ -30,22 +31,29 @@ function ssrRegisterHelper(comp, filename) {
 
 /**
  * @typedef { import('@rollup/pluginutils').FilterPattern} FilterPattern
- * @typedef { { include?: FilterPattern, exclude?: FilterPattern } } CommonOtions
+ * @typedef { { include?: FilterPattern, exclude?: FilterPattern, babelPlugins?: any[] } } CommonOptions
  */
 
 /**
  *
- * @param {import('@vue/babel-plugin-jsx').VueJSXPluginOptions & CommonOtions} options
+ * @param {import('@vue/babel-plugin-jsx').VueJSXPluginOptions & CommonOptions} options
  * @returns {import('vite').Plugin}
  */
 function vueJsxPlugin(options = {}) {
+  let root = ''
   let needHmr = false
   let needSourceMap = true
 
   return {
-    name: 'vue-jsx',
+    name: 'vite:vue-jsx',
 
     config(config) {
+      const optionsApi = config.define
+        ? config.define.__VUE_OPTIONS_API__
+        : undefined
+      const devTools = config.define
+        ? config.define.__VUE_PROD_DEVTOOLS__
+        : undefined
       return {
         // only apply esbuild to ts files
         // since we are handling jsx and tsx now
@@ -53,9 +61,8 @@ function vueJsxPlugin(options = {}) {
           include: /\.ts$/
         },
         define: {
-          __VUE_OPTIONS_API__: true,
-          __VUE_PROD_DEVTOOLS__: false,
-          ...config.define
+          __VUE_OPTIONS_API__: optionsApi != null ? optionsApi : true,
+          __VUE_PROD_DEVTOOLS__: devTools != null ? devTools : false
         }
       }
     },
@@ -63,6 +70,7 @@ function vueJsxPlugin(options = {}) {
     configResolved(config) {
       needHmr = config.command === 'serve' && !config.isProduction
       needSourceMap = config.command === 'serve' || !!config.build.sourcemap
+      root = config.root
     },
 
     resolveId(id) {
@@ -77,13 +85,19 @@ function vueJsxPlugin(options = {}) {
       }
     },
 
-    transform(code, id, ssr) {
-      const { include, exclude, ...babelPluginOptions } = options
+    transform(code, id, opt) {
+      const ssr = typeof opt === 'boolean' ? opt : (opt && opt.ssr) === true
+      const {
+        include,
+        exclude,
+        babelPlugins = [],
+        ...babelPluginOptions
+      } = options
 
       const filter = createFilter(include || /\.[jt]sx$/, exclude)
 
       if (filter(id)) {
-        const plugins = [importMeta, [jsx, babelPluginOptions]]
+        const plugins = [importMeta, [jsx, babelPluginOptions], ...babelPlugins]
         if (id.endsWith('.tsx')) {
           plugins.push([
             require('@babel/plugin-transform-typescript'),
@@ -191,16 +205,16 @@ function vueJsxPlugin(options = {}) {
         }
 
         if (hotComponents.length) {
-          if (needHmr && !ssr) {
-            let code = result.code
-            if (hasDefault) {
-              code =
-                code.replace(
-                  /export default defineComponent/g,
-                  `const __default__ = defineComponent`
-                ) + `\nexport default __default__`
-            }
+          if (hasDefault && (needHmr || ssr)) {
+            result.code =
+              result.code.replace(
+                /export default defineComponent/g,
+                `const __default__ = defineComponent`
+              ) + `\nexport default __default__`
+          }
 
+          if (needHmr && !ssr && !/\?vue&type=script/.test(id)) {
+            let code = result.code
             let callbackCode = ``
             for (const { local, exported, id } of hotComponents) {
               code +=
@@ -217,9 +231,10 @@ function vueJsxPlugin(options = {}) {
           }
 
           if (ssr) {
+            const normalizedId = normalizePath(path.relative(root, id))
             let ssrInjectCode =
               `\nimport { ssrRegisterHelper } from "${ssrRegisterHelperId}"` +
-              `\nconst __moduleId = ${JSON.stringify(id)}`
+              `\nconst __moduleId = ${JSON.stringify(normalizedId)}`
             for (const { local } of hotComponents) {
               ssrInjectCode += `\nssrRegisterHelper(${local}, __moduleId)`
             }

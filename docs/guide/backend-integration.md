@@ -1,14 +1,16 @@
 # Backend Integration
 
+:::tip Note
 If you want to serve the HTML using a traditional backend (e.g. Rails, Laravel) but use Vite for serving assets, check for existing integrations listed in [Awesome Vite](https://github.com/vitejs/awesome-vite#integrations-with-backends).
 
-Or you can follow these steps to configure it manually:
+If you need a custom integration, you can follow the steps in this guide to configure it manually
+:::
 
 1. In your Vite config, configure the entry and enable build manifest:
 
    ```js
    // vite.config.js
-   export default {
+   export default defineConfig({
      build: {
        // generate manifest.json in outDir
        manifest: true,
@@ -17,7 +19,14 @@ Or you can follow these steps to configure it manually:
          input: '/path/to/main.js'
        }
      }
-   }
+   })
+   ```
+
+   If you haven't disabled the [module preload polyfill](/config/#build-polyfillmodulepreload), you also need to import the polyfill in your entry
+
+   ```js
+   // add the beginning of your app entry
+   import 'vite/modulepreload-polyfill'
    ```
 
 2. For development, inject the following in your server's HTML template (substitute `http://localhost:3000` with the local URL Vite is running at):
@@ -30,7 +39,7 @@ Or you can follow these steps to configure it manually:
 
    Also make sure the server is configured to serve static assets in the Vite working directory, otherwise assets such as images won't be loaded properly.
 
-   Note if you are using React with `@vitejs/plugin-react-refresh`, you'll also need to add this before the above scripts, since the plugin is not able to modify the HTML you are serving:
+   Note if you are using React with `@vitejs/plugin-react`, you'll also need to add this before the above scripts, since the plugin is not able to modify the HTML you are serving:
 
    ```html
    <script type="module">

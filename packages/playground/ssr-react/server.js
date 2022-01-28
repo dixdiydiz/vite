@@ -5,6 +5,8 @@ const express = require('express')
 
 const isTest = process.env.NODE_ENV === 'test' || !!process.env.VITE_TEST_BUILD
 
+process.env.MY_CUSTOM_SECRET = 'API_KEY_qwertyuiop'
+
 async function createServer(
   root = process.cwd(),
   isProd = process.env.NODE_ENV === 'production'
@@ -26,7 +28,7 @@ async function createServer(
       root,
       logLevel: isTest ? 'error' : 'info',
       server: {
-        middlewareMode: true,
+        middlewareMode: 'ssr',
         watch: {
           // During tests we edit the files too fast and sometimes chokidar
           // misses change events, so enforce polling for consistency

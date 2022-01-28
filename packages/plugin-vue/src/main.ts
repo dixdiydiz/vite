@@ -1,18 +1,22 @@
 import qs from 'querystring'
 import path from 'path'
-import { rewriteDefault, SFCBlock, SFCDescriptor } from '@vue/compiler-sfc'
-import { ResolvedOptions } from '.'
+import type { SFCBlock, SFCDescriptor } from 'vue/compiler-sfc'
+import type { ResolvedOptions } from '.'
 import {
   createDescriptor,
   getPrevDescriptor,
-  setDescriptor
+  setSrcDescriptor
 } from './utils/descriptorCache'
-import { PluginContext, TransformPluginContext } from 'rollup'
-import { resolveScript } from './script'
+import type { PluginContext, SourceMap, TransformPluginContext } from 'rollup'
+import { normalizePath } from '@rollup/pluginutils'
+import { resolveScript, isUseInlineTemplate } from './script'
 import { transformTemplateInMain } from './template'
 import { isOnlyTemplateChanged, isEqualBlock } from './handleHotUpdate'
-import { RawSourceMap, SourceMapConsumer, SourceMapGenerator } from 'source-map'
+import type { RawSourceMap } from 'source-map'
+import { SourceMapConsumer, SourceMapGenerator } from 'source-map'
 import { createRollupError } from './utils/error'
+import { transformWithEsbuild } from 'vite'
+import { EXPORT_HELPER_ID } from './helper'
 
 // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types
 export async function transformMain(
@@ -20,18 +24,14 @@ export async function transformMain(
   filename: string,
   options: ResolvedOptions,
   pluginContext: TransformPluginContext,
-  ssr: boolean
+  ssr: boolean,
+  asCustomElement: boolean
 ) {
-  const { root, devServer, isProduction } = options
+  const { devServer, isProduction } = options
 
   // prev descriptor is only set and used for hmr
   const prevDescriptor = getPrevDescriptor(filename)
-  const { descriptor, errors } = createDescriptor(
-    filename,
-    code,
-    root,
-    isProduction
-  )
+  const { descriptor, errors } = createDescriptor(filename, code, options)
 
   if (errors.length) {
     errors.forEach((error) =>
@@ -41,6 +41,7 @@ export async function transformMain(
   }
 
   // feature information
+  const attachedProps: [string, string][] = []
   const hasScoped = descriptor.styles.some((s) => s.scoped)
 
   // script
@@ -52,17 +53,11 @@ export async function transformMain(
   )
 
   // template
-  // Check if we can use compile template as inlined render function
-  // inside <script setup>. This can only be done for build because
-  // inlined template cannot be individually hot updated.
-  const useInlineTemplate =
-    !devServer &&
-    descriptor.scriptSetup &&
-    !(descriptor.template && descriptor.template.src)
-  const hasTemplateImport = descriptor.template && !useInlineTemplate
+  const hasTemplateImport =
+    descriptor.template && !isUseInlineTemplate(descriptor, !devServer)
 
   let templateCode = ''
-  let templateMap
+  let templateMap: RawSourceMap | undefined
   if (hasTemplateImport) {
     ;({ code: templateCode, map: templateMap } = await genTemplateCode(
       descriptor,
@@ -72,11 +67,10 @@ export async function transformMain(
     ))
   }
 
-  let renderReplace = ''
   if (hasTemplateImport) {
-    renderReplace = ssr
-      ? `_sfc_main.ssrRender = _sfc_ssrRender`
-      : `_sfc_main.render = _sfc_render`
+    attachedProps.push(
+      ssr ? ['ssrRender', '_sfc_ssrRender'] : ['render', '_sfc_render']
+    )
   } else {
     // #2128
     // User may empty the template but we didn't provide rerender function before
@@ -84,14 +78,17 @@ export async function transformMain(
       prevDescriptor &&
       !isEqualBlock(descriptor.template, prevDescriptor.template)
     ) {
-      renderReplace = ssr
-        ? `_sfc_main.ssrRender = () => {}`
-        : `_sfc_main.render = () => {}`
+      attachedProps.push([ssr ? 'ssrRender' : 'render', '() => {}'])
     }
   }
 
   // styles
-  const stylesCode = await genStyleCode(descriptor, pluginContext)
+  const stylesCode = await genStyleCode(
+    descriptor,
+    pluginContext,
+    asCustomElement,
+    attachedProps
+  )
 
   // custom blocks
   const customBlocksCode = await genCustomBlockCode(descriptor, pluginContext)
@@ -100,19 +97,15 @@ export async function transformMain(
     scriptCode,
     templateCode,
     stylesCode,
-    customBlocksCode,
-    renderReplace
+    customBlocksCode
   ]
   if (hasScoped) {
-    output.push(
-      `_sfc_main.__scopeId = ${JSON.stringify(`data-v-${descriptor.id}`)}`
-    )
+    attachedProps.push([`__scopeId`, JSON.stringify(`data-v-${descriptor.id}`)])
   }
   if (devServer && !isProduction) {
     // expose filename during serve for devtools to pickup
-    output.push(`_sfc_main.__file = ${JSON.stringify(filename)}`)
+    attachedProps.push([`__file`, JSON.stringify(filename)])
   }
-  output.push('export default _sfc_main')
 
   // HMR
   if (
@@ -143,13 +136,16 @@ export async function transformMain(
 
   // SSR module registration by wrapping user setup
   if (ssr) {
+    const normalizedFilename = normalizePath(
+      path.relative(options.root, filename)
+    )
     output.push(
       `import { useSSRContext as __vite_useSSRContext } from 'vue'`,
       `const _sfc_setup = _sfc_main.setup`,
       `_sfc_main.setup = (props, ctx) => {`,
       `  const ssrContext = __vite_useSSRContext()`,
       `  ;(ssrContext.modules || (ssrContext.modules = new Set())).add(${JSON.stringify(
-        filename
+        normalizedFilename
       )})`,
       `  return _sfc_setup ? _sfc_setup(props, ctx) : undefined`,
       `}`
@@ -158,8 +154,8 @@ export async function transformMain(
 
   // if the template is inlined into the main module (indicated by the presence
   // of templateMap, we need to concatenate the two source maps.
-  let resolvedMap = map
-  if (map && templateMap) {
+  let resolvedMap = options.sourceMap ? map : undefined
+  if (resolvedMap && templateMap) {
     const generator = SourceMapGenerator.fromSourceMap(
       new SourceMapConsumer(map)
     )
@@ -175,14 +171,42 @@ export async function transformMain(
         }
       })
     })
-    resolvedMap = (generator as any).toJSON()
+    resolvedMap = (generator as any).toJSON() as RawSourceMap
     // if this is a template only update, we will be reusing a cached version
     // of the main module compile result, which has outdated sourcesContent.
     resolvedMap.sourcesContent = templateMap.sourcesContent
   }
 
+  if (!attachedProps.length) {
+    output.push(`export default _sfc_main`)
+  } else {
+    output.push(
+      `import _export_sfc from '${EXPORT_HELPER_ID}'`,
+      `export default /*#__PURE__*/_export_sfc(_sfc_main, [${attachedProps
+        .map(([key, val]) => `['${key}',${val}]`)
+        .join(',')}])`
+    )
+  }
+
+  // handle TS transpilation
+  let resolvedCode = output.join('\n')
+  if (
+    (descriptor.script?.lang === 'ts' ||
+      descriptor.scriptSetup?.lang === 'ts') &&
+    !descriptor.script?.src // only normal script can have src
+  ) {
+    const { code, map } = await transformWithEsbuild(
+      resolvedCode,
+      filename,
+      { loader: 'ts', sourcemap: options.sourceMap },
+      resolvedMap
+    )
+    resolvedCode = code
+    resolvedMap = resolvedMap ? (map as any) : resolvedMap
+  }
+
   return {
-    code: output.join('\n'),
+    code: resolvedCode,
     map: resolvedMap || {
       mappings: ''
     }
@@ -213,7 +237,7 @@ async function genTemplateCode(
       await linkSrcToDescriptor(template.src, descriptor, pluginContext)
     }
     const src = template.src || descriptor.filename
-    const srcQuery = template.src ? `&src` : ``
+    const srcQuery = template.src ? `&src=${descriptor.id}` : ``
     const attrsQuery = attrsToQuery(template.attrs, 'js', true)
     const query = `?vue&type=template${srcQuery}${attrsQuery}`
     const request = JSON.stringify(src + query)
@@ -225,8 +249,6 @@ async function genTemplateCode(
   }
 }
 
-const exportDefaultClassRE = /(?:(?:^|\n|;)\s*)export\s+default\s+class\s+([\w$]+)/
-
 async function genScriptCode(
   descriptor: SFCDescriptor,
   options: ResolvedOptions,
@@ -237,39 +259,19 @@ async function genScriptCode(
   map: RawSourceMap
 }> {
   let scriptCode = `const _sfc_main = {}`
-  let map
+  let map: RawSourceMap | SourceMap | undefined
+
   const script = resolveScript(descriptor, options, ssr)
   if (script) {
     // If the script is js/ts and has no external src, it can be directly placed
     // in the main module.
-    if (
-      (!script.lang || (script.lang === 'ts' && options.devServer)) &&
-      !script.src
-    ) {
-      // TODO remove the class check logic after upgrading @vue/compiler-sfc
-      const classMatch = script.content.match(exportDefaultClassRE)
-      if (classMatch) {
-        scriptCode =
-          script.content.replace(exportDefaultClassRE, `\nclass $1`) +
-          `\nconst _sfc_main = ${classMatch[1]}`
-        if (/export\s+default/.test(scriptCode)) {
-          // fallback if there are still export default
-          scriptCode = rewriteDefault(script.content, `_sfc_main`)
-        }
-      } else {
-        scriptCode = rewriteDefault(script.content, `_sfc_main`)
-      }
+    if ((!script.lang || script.lang === 'ts') && !script.src) {
+      scriptCode = options.compiler.rewriteDefault(
+        script.content,
+        '_sfc_main',
+        script.lang === 'ts' ? ['typescript'] : undefined
+      )
       map = script.map
-      if (script.lang === 'ts') {
-        const result = await options.devServer!.transformWithEsbuild(
-          scriptCode,
-          descriptor.filename,
-          { loader: 'ts' },
-          map
-        )
-        scriptCode = result.code
-        map = result.map
-      }
     } else {
       if (script.src) {
         await linkSrcToDescriptor(script.src, descriptor, pluginContext)
@@ -277,7 +279,7 @@ async function genScriptCode(
       const src = script.src || descriptor.filename
       const langFallback = (script.src && path.extname(src).slice(1)) || 'js'
       const attrsQuery = attrsToQuery(script.attrs, langFallback)
-      const srcQuery = script.src ? `&src` : ``
+      const srcQuery = script.src ? `&src=${descriptor.id}` : ``
       const query = `?vue&type=script${srcQuery}${attrsQuery}`
       const request = JSON.stringify(src + query)
       scriptCode =
@@ -292,10 +294,12 @@ async function genScriptCode(
 
 async function genStyleCode(
   descriptor: SFCDescriptor,
-  pluginContext: PluginContext
+  pluginContext: PluginContext,
+  asCustomElement: boolean,
+  attachedProps: [string, string][]
 ) {
   let stylesCode = ``
-  let hasCSSModules = false
+  let cssModulesMap: Record<string, string> | undefined
   if (descriptor.styles.length) {
     for (let i = 0; i < descriptor.styles.length; i++) {
       const style = descriptor.styles[i]
@@ -306,22 +310,66 @@ async function genStyleCode(
       // do not include module in default query, since we use it to indicate
       // that the module needs to export the modules json
       const attrsQuery = attrsToQuery(style.attrs, 'css')
-      const srcQuery = style.src ? `&src` : ``
-      const query = `?vue&type=style&index=${i}${srcQuery}`
+      const srcQuery = style.src ? `&src=${descriptor.id}` : ``
+      const directQuery = asCustomElement ? `&inline` : ``
+      const query = `?vue&type=style&index=${i}${srcQuery}${directQuery}`
       const styleRequest = src + query + attrsQuery
       if (style.module) {
-        if (!hasCSSModules) {
-          stylesCode += `\nconst cssModules = _sfc_main.__cssModules = {}`
-          hasCSSModules = true
+        if (asCustomElement) {
+          throw new Error(
+            `<style module> is not supported in custom elements mode.`
+          )
         }
-        stylesCode += genCSSModulesCode(i, styleRequest, style.module)
+        const [importCode, nameMap] = genCSSModulesCode(
+          i,
+          styleRequest,
+          style.module
+        )
+        stylesCode += importCode
+        Object.assign((cssModulesMap ||= {}), nameMap)
       } else {
-        stylesCode += `\nimport ${JSON.stringify(styleRequest)}`
+        if (asCustomElement) {
+          stylesCode += `\nimport _style_${i} from ${JSON.stringify(
+            styleRequest
+          )}`
+        } else {
+          stylesCode += `\nimport ${JSON.stringify(styleRequest)}`
+        }
       }
       // TODO SSR critical CSS collection
     }
+    if (asCustomElement) {
+      attachedProps.push([
+        `styles`,
+        `[${descriptor.styles.map((_, i) => `_style_${i}`).join(',')}]`
+      ])
+    }
+  }
+  if (cssModulesMap) {
+    const mappingCode =
+      Object.entries(cssModulesMap).reduce(
+        (code, [key, value]) => code + `"${key}":${value},\n`,
+        '{\n'
+      ) + '}'
+    stylesCode += `\nconst cssModules = ${mappingCode}`
+    attachedProps.push([`__cssModules`, `cssModules`])
   }
   return stylesCode
+}
+
+function genCSSModulesCode(
+  index: number,
+  request: string,
+  moduleName: string | boolean
+): [importCode: string, nameMap: Record<string, string>] {
+  const styleVar = `style${index}`
+  const exposedName = typeof moduleName === 'string' ? moduleName : '$style'
+  // inject `.module` before extension so vite handles it as css module
+  const moduleRequest = request.replace(/\.(\w+)$/, '.module.$1')
+  return [
+    `\nimport ${styleVar} from ${JSON.stringify(moduleRequest)}`,
+    { [exposedName]: styleVar }
+  ]
 }
 
 async function genCustomBlockCode(
@@ -345,21 +393,6 @@ async function genCustomBlockCode(
   return code
 }
 
-function genCSSModulesCode(
-  index: number,
-  request: string,
-  moduleName: string | boolean
-): string {
-  const styleVar = `style${index}`
-  const exposedName = typeof moduleName === 'string' ? moduleName : '$style'
-  // inject `.module` before extension so vite handles it as css module
-  const moduleRequest = request.replace(/\.(\w+)$/, '.module.$1')
-  return (
-    `\nimport ${styleVar} from ${JSON.stringify(moduleRequest)}` +
-    `\ncssModules["${exposedName}"] = ${styleVar}`
-  )
-}
-
 /**
  * For blocks with src imports, it is important to link the imported file
  * with its owner SFC descriptor so that we can get the information about
@@ -374,7 +407,7 @@ async function linkSrcToDescriptor(
     (await pluginContext.resolve(src, descriptor.filename))?.id || src
   // #1812 if the src points to a dep file, the resolved id may contain a
   // version query.
-  setDescriptor(srcFile.replace(/\?.*$/, ''), descriptor)
+  setSrcDescriptor(srcFile.replace(/\?.*$/, ''), descriptor)
 }
 
 // these are built-in query parameters so should be ignored

@@ -3,6 +3,9 @@ const path = require('path')
  * @type {import('vite').UserConfig}
  */
 module.exports = {
+  build: {
+    cssTarget: 'chrome61'
+  },
   resolve: {
     alias: {
       '@': __dirname
@@ -32,7 +35,10 @@ module.exports = {
     },
     preprocessorOptions: {
       scss: {
-        additionalData: `$injectedColor: orange;`
+        additionalData: `$injectedColor: orange;`,
+        importer(url) {
+          if (url === 'virtual-dep') return { contents: '' }
+        }
       },
       styl: {
         additionalData: `$injectedColor ?= orange`,
