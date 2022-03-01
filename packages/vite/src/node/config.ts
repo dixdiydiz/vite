@@ -92,7 +92,7 @@ export interface UserConfig {
    * the performance. You can use `--force` flag or manually delete the directory
    * to regenerate the cache files. The value can be either an absolute file
    * system path or a path relative to <root>.
-   * Default to `.vite` when no package.json is detected.
+   * Default to `.vite` when no `package.json` is detected.
    * @default 'node_modules/.vite'
    */
   cacheDir?: string
@@ -398,11 +398,7 @@ export async function resolveConfig(
 
   // resolve public base url
   const BASE_URL = resolveBaseUrl(config.base, command === 'build', logger)
-  const resolvedBuildOptions = resolveBuildOptions(
-    resolvedRoot,
-    config.build,
-    command === 'build'
-  )
+  const resolvedBuildOptions = resolveBuildOptions(config.build)
 
   // resolve cache directory
   const pkgPath = lookupFile(
@@ -653,7 +649,7 @@ export async function resolveConfig(
     )
   }
 
-  if (config.build?.terserOptions && config.build.minify === 'esbuild') {
+  if (config.build?.terserOptions && config.build.minify !== 'terser') {
     logger.warn(
       colors.yellow(
         `build.terserOptions is specified but build.minify is not set to use Terser. ` +
@@ -1090,7 +1086,7 @@ export function loadEnv(
     const path = lookupFile(envDir, [file], true)
     if (path) {
       const parsed = dotenv.parse(fs.readFileSync(path), {
-        debug: !!process.env.DEBUG || undefined
+        debug: process.env.DEBUG?.includes('vite:dotenv') || undefined
       })
 
       // let environment variables use each other
