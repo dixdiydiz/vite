@@ -1,13 +1,13 @@
 // this is automatically detected by playground/vitestSetup.ts and will replace
 // the default e2e test serve behavior
 
-import path from 'path'
+import path from 'node:path'
 import kill from 'kill-port'
 import { isBuild, ports, rootDir } from '~utils'
 
 export const port = ports['ssr-webworker']
 
-export async function serve() {
+export async function serve(): Promise<{ close(): Promise<void> }> {
   await kill(port)
 
   // we build first, regardless of whether it's prod/build mode
@@ -21,11 +21,11 @@ export async function serve() {
     build: {
       target: 'esnext',
       ssr: 'src/entry-worker.jsx',
-      outDir: 'dist/worker'
-    }
+      outDir: 'dist/worker',
+    },
   })
 
-  const { createServer } = require(path.resolve(rootDir, 'worker.js'))
+  const { createServer } = await import(path.resolve(rootDir, 'worker.js'))
   const { app } = await createServer(rootDir, isBuild)
 
   return new Promise((resolve, reject) => {
@@ -37,7 +37,7 @@ export async function serve() {
             await new Promise((resolve) => {
               server.close(resolve)
             })
-          }
+          },
         })
       })
     } catch (e) {

@@ -1,9 +1,21 @@
+import { virtual } from 'virtual:file'
 import { foo as depFoo, nestedFoo } from './hmrDep'
+import './importing-updated'
+import './invalidation/parent'
+import './file-delete-restore'
 
 export const foo = 1
 text('.app', foo)
 text('.dep', depFoo)
 text('.nested', nestedFoo)
+text('.virtual', virtual)
+
+const btn = document.querySelector('.virtual-update') as HTMLButtonElement
+btn.onclick = () => {
+  if (import.meta.hot) {
+    import.meta.hot.send('virtual:increment')
+  }
+}
 
 if (import.meta.hot) {
   import.meta.hot.accept(({ foo }) => {
@@ -33,25 +45,62 @@ if (import.meta.hot) {
     console.log(`foo was:`, foo)
   })
 
+  import.meta.hot.on('vite:afterUpdate', (event) => {
+    console.log(`>>> vite:afterUpdate -- ${event.type}`)
+  })
+
   import.meta.hot.on('vite:beforeUpdate', (event) => {
     console.log(`>>> vite:beforeUpdate -- ${event.type}`)
 
     const cssUpdate = event.updates.find(
       (update) =>
-        update.type === 'css-update' && update.path.match('global.css')
+        update.type === 'css-update' && update.path.match('global.css'),
     )
     if (cssUpdate) {
-      const el = document.querySelector('#global-css') as HTMLLinkElement
-      text('.css-prev', el.href)
-      // We don't have a vite:afterUpdate event, but updates are currently sync
-      setTimeout(() => {
-        text('.css-post', el.href)
-      }, 0)
+      text(
+        '.css-prev',
+        (document.querySelector('.global-css') as HTMLLinkElement).href,
+      )
+
+      // Wait until the tag has been swapped out, which includes the time taken
+      // to download and parse the new stylesheet. Assert the swapped link.
+      const observer = new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => {
+          mutation.addedNodes.forEach((node) => {
+            if (
+              node.nodeType === Node.ELEMENT_NODE &&
+              (node as Element).tagName === 'LINK'
+            ) {
+              text('.link-tag-added', 'yes')
+            }
+          })
+          mutation.removedNodes.forEach((node) => {
+            if (
+              node.nodeType === Node.ELEMENT_NODE &&
+              (node as Element).tagName === 'LINK'
+            ) {
+              text('.link-tag-removed', 'yes')
+              text(
+                '.css-post',
+                (document.querySelector('.global-css') as HTMLLinkElement).href,
+              )
+            }
+          })
+        })
+      })
+
+      observer.observe(document.querySelector('#style-tags-wrapper'), {
+        childList: true,
+      })
     }
   })
 
   import.meta.hot.on('vite:error', (event) => {
-    console.log(`>>> vite:error -- ${event.type}`)
+    console.log(`>>> vite:error -- ${event.err.message}`)
+  })
+
+  import.meta.hot.on('vite:invalidate', ({ path }) => {
+    console.log(`>>> vite:invalidate -- ${path}`)
   })
 
   import.meta.hot.on('custom:foo', ({ msg }) => {

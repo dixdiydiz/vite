@@ -1,12 +1,11 @@
-import path from 'path'
-import fs from 'fs'
+import { describe, expect, test } from 'vitest'
 import {
   isBuild,
   isServe,
   page,
+  readFile,
   serverLogs,
-  testDir,
-  untilUpdated
+  untilUpdated,
 } from '~utils'
 
 describe.runIf(isBuild)('build', () => {
@@ -16,37 +15,28 @@ describe.runIf(isBuild)('build', () => {
 
   test('umd', async () => {
     expect(await page.textContent('.umd')).toBe('It works')
-    const code = fs.readFileSync(
-      path.join(testDir, 'dist/my-lib-custom-filename.umd.js'),
-      'utf-8'
-    )
+    const code = readFile('dist/my-lib-custom-filename.umd.js')
     // esbuild helpers are injected inside of the UMD wrapper
     expect(code).toMatch(/^\(function\(/)
   })
 
   test('iife', async () => {
     expect(await page.textContent('.iife')).toBe('It works')
-    const code = fs.readFileSync(
-      path.join(testDir, 'dist/my-lib-custom-filename.iife.js'),
-      'utf-8'
-    )
+    const code = readFile('dist/my-lib-custom-filename.iife.js')
     // esbuild helpers are injected inside of the IIFE wrapper
-    expect(code).toMatch(/^const MyLib=function\(\){"use strict";/)
+    expect(code).toMatch(/^var MyLib=function\(\)\{"use strict";/)
   })
 
   test('Library mode does not include `preload`', async () => {
     await untilUpdated(
       () => page.textContent('.dynamic-import-message'),
-      'hello vite'
+      'hello vite',
     )
-    const code = fs.readFileSync(
-      path.join(testDir, 'dist/lib/dynamic-import-message.es.js'),
-      'utf-8'
-    )
+    const code = readFile('dist/lib/dynamic-import-message.es.mjs')
     expect(code).not.toMatch('__vitePreload')
 
     // Test that library chunks are hashed
-    expect(code).toMatch(/await import\("\.\/message.[a-z\d]{8}.js"\)/)
+    expect(code).toMatch(/await import\("\.\/message-[a-z\d]{8}.mjs"\)/)
   })
 
   test('@import hoist', async () => {
@@ -54,6 +44,15 @@ describe.runIf(isBuild)('build', () => {
       // no warning from esbuild css minifier
       expect(log).not.toMatch('All "@import" rules must come first')
     })
+  })
+
+  test('preserve process.env', () => {
+    const es = readFile('dist/my-lib-custom-filename.mjs')
+    const iife = readFile('dist/my-lib-custom-filename.iife.js')
+    const umd = readFile('dist/my-lib-custom-filename.umd.js')
+    expect(es).toMatch('process.env.NODE_ENV')
+    expect(iife).toMatch('process.env.NODE_ENV')
+    expect(umd).toMatch('process.env.NODE_ENV')
   })
 })
 

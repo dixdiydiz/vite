@@ -1,42 +1,50 @@
-const vueJsx = require('@vitejs/plugin-vue-jsx')
+const path = require('node:path')
 const vite = require('vite')
-const path = require('path')
+const workerPluginTestPlugin = require('./worker-plugin-test-plugin')
 
 module.exports = vite.defineConfig({
   base: './',
-  enforce: 'pre',
+  resolve: {
+    alias: {
+      '@': __dirname,
+    },
+  },
   worker: {
     format: 'es',
-    plugins: [vueJsx()],
+    plugins: [workerPluginTestPlugin()],
     rollupOptions: {
       output: {
-        assetFileNames: 'worker-assets/worker_asset.[name]-[hash].[ext]',
-        chunkFileNames: 'worker-chunks/worker_chunk.[name]-[hash].js',
-        entryFileNames: 'worker-entries/worker_entry.[name]-[hash].js'
-      }
-    }
+        assetFileNames: 'worker-assets/worker_asset-[name]-[hash].[ext]',
+        chunkFileNames: 'worker-chunks/worker_chunk-[name]-[hash].js',
+        entryFileNames: 'worker-entries/worker_entry-[name]-[hash].js',
+      },
+    },
   },
   build: {
-    outDir: 'dist',
+    outDir: 'dist/relative-base',
     rollupOptions: {
       output: {
         assetFileNames: 'other-assets/[name]-[hash].[ext]',
         chunkFileNames: 'chunks/[name]-[hash].js',
-        entryFileNames: 'entries/[name]-[hash].js'
-      }
-    }
+        entryFileNames: 'entries/[name]-[hash].js',
+      },
+    },
+  },
+  testConfig: {
+    baseRoute: '/relative-base/',
   },
   plugins: [
+    workerPluginTestPlugin(),
     {
       name: 'resolve-format-es',
       transform(code, id) {
         if (id.includes('main.js')) {
           return code.replace(
             `/* flag: will replace in vite config import("./format-es.js") */`,
-            `import("./main-format-es")`
+            `import("./main-format-es")`,
           )
         }
-      }
-    }
-  ]
+      },
+    },
+  ],
 })

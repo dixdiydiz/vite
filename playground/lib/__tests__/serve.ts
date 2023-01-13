@@ -1,8 +1,8 @@
 // this is automatically detected by playground/vitestSetup.ts and will replace
 // the default e2e test serve behavior
 
-import path from 'path'
-import http from 'http'
+import path from 'node:path'
+import http from 'node:http'
 import sirv from 'sirv'
 import {
   isBuild,
@@ -11,12 +11,12 @@ import {
   rootDir,
   serverLogs,
   setViteUrl,
-  viteTestUrl
+  viteTestUrl,
 } from '~utils'
 
 export const port = ports.lib
 
-export async function serve() {
+export async function serve(): Promise<{ close(): Promise<void> }> {
   setupConsoleWarnCollector()
 
   if (!isBuild) {
@@ -29,21 +29,21 @@ export async function serve() {
         server: {
           watch: {
             usePolling: true,
-            interval: 100
+            interval: 100,
           },
           host: true,
           fs: {
-            strict: !isBuild
-          }
+            strict: !isBuild,
+          },
         },
         build: {
-          target: 'esnext'
-        }
+          target: 'esnext',
+        },
       })
     ).listen()
     // use resolved port/base from server
-    const base = viteServer.config.base === '/' ? '' : viteServer.config.base
-    setViteUrl(`http://localhost:${viteServer.config.server.port}${base}`)
+    const devBase = viteServer.config.base === '/' ? '' : viteServer.config.base
+    setViteUrl(`http://localhost:${viteServer.config.server.port}${devBase}`)
     await page.goto(viteTestUrl)
 
     return viteServer
@@ -52,13 +52,13 @@ export async function serve() {
     await build({
       root: rootDir,
       logLevel: 'silent',
-      configFile: path.resolve(__dirname, '../vite.config.js')
+      configFile: path.resolve(__dirname, '../vite.config.js'),
     })
 
     await build({
       root: rootDir,
       logLevel: 'warn', // output esbuild warns
-      configFile: path.resolve(__dirname, '../vite.dyimport.config.js')
+      configFile: path.resolve(__dirname, '../vite.dyimport.config.js'),
     })
 
     // start static file server
@@ -82,7 +82,7 @@ export async function serve() {
               await new Promise((resolve) => {
                 server.close(resolve)
               })
-            }
+            },
           })
         })
       } catch (e) {

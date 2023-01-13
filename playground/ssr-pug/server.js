@@ -1,9 +1,12 @@
 // @ts-check
-const path = require('path')
-const pug = require('pug')
-const express = require('express')
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import pug from 'pug'
+import express from 'express'
 
-const isTest = process.env.NODE_ENV === 'test' || !!process.env.VITE_TEST_BUILD
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+const isTest = process.env.VITEST
 
 const DYNAMIC_SCRIPTS = `
   <script type="module">
@@ -14,7 +17,7 @@ const DYNAMIC_SCRIPTS = `
   <script type="module" src="/src/app.js"></script>
 `
 
-async function createServer(root = process.cwd(), hmrPort) {
+export async function createServer(root = process.cwd(), hmrPort) {
   const resolve = (p) => path.resolve(__dirname, p)
 
   const app = express()
@@ -22,22 +25,24 @@ async function createServer(root = process.cwd(), hmrPort) {
   /**
    * @type {import('vite').ViteDevServer}
    */
-  let vite
-  vite = await require('vite').createServer({
+  const vite = await (
+    await import('vite')
+  ).createServer({
     root,
     logLevel: isTest ? 'error' : 'info',
     server: {
-      middlewareMode: 'ssr',
+      middlewareMode: true,
       watch: {
         // During tests we edit the files too fast and sometimes chokidar
         // misses change events, so enforce polling for consistency
         usePolling: true,
-        interval: 100
+        interval: 100,
       },
       hmr: {
-        port: hmrPort
-      }
-    }
+        port: hmrPort,
+      },
+    },
+    appType: 'custom',
   })
   // use vite's connect instance as middleware
   app.use(vite.middlewares)
@@ -68,9 +73,6 @@ if (!isTest) {
   createServer().then(({ app }) =>
     app.listen(5173, () => {
       console.log('http://localhost:5173')
-    })
+    }),
   )
 }
-
-// for test use
-exports.createServer = createServer

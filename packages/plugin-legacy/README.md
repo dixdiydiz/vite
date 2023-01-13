@@ -1,6 +1,6 @@
 # @vitejs/plugin-legacy [![npm](https://img.shields.io/npm/v/@vitejs/plugin-legacy.svg)](https://npmjs.com/package/@vitejs/plugin-legacy)
 
-Vite's default browser support baseline is [Native ESM](https://caniuse.com/es6-module). This plugin provides support for legacy browsers that do not support native ESM when building for production.
+Vite's default browser support baseline is [Native ESM](https://caniuse.com/es6-module), [native ESM dynamic import](https://caniuse.com/es6-module-dynamic-import), and [`import.meta`](https://caniuse.com/mdn-javascript_operators_import_meta). This plugin provides support for legacy browsers that do not support those features when building for production.
 
 By default, this plugin will:
 
@@ -21,10 +21,16 @@ import legacy from '@vitejs/plugin-legacy'
 export default {
   plugins: [
     legacy({
-      targets: ['defaults', 'not IE 11']
-    })
-  ]
+      targets: ['defaults', 'not IE 11'],
+    }),
+  ],
 }
+```
+
+Terser must be installed because plugin-legacy uses Terser for minification.
+
+```sh
+npm add -D terser
 ```
 
 ## Options
@@ -98,9 +104,9 @@ export default {
         modernPolyfills: [
           /* ... */
         ],
-        renderLegacyChunks: false
-      })
-    ]
+        renderLegacyChunks: false,
+      }),
+    ],
   }
   ```
 
@@ -135,9 +141,9 @@ export default {
   plugins: [
     legacy({
       polyfills: ['es.promise.finally', 'es/map', 'es/set'],
-      modernPolyfills: ['es.promise.finally']
-    })
-  ]
+      modernPolyfills: ['es.promise.finally'],
+    }),
+  ],
 }
 ```
 
@@ -147,13 +153,17 @@ The legacy plugin requires inline scripts for [Safari 10.1 `nomodule` fix](https
 
 - `sha256-MS6/3FCg4WjP9gwgaBGwLpRCY6fZBgwmhVCdrPrNf3E=`
 - `sha256-tQjf8gvb2ROOMapIxFvFAYBeUJ0v1HCbOcSmDNXGtDo=`
-- `sha256-4m6wOIrq/wFDmi9Xh3mFM2mwI4ik9n3TMgHk6xDtLxk=`
-- `sha256-uS7/g9fhQwNZS1f/MqYqqKv8y9hCu36IfX9XZB5L7YY=`
+- `sha256-BoFUHKsYhJ9tbsHugtNQCmnkBbZ11pcW6kZguu+T+EU=`
+- `sha256-A18HC3jLpyEc9B8oyxq/NBFCyFBJFSsRLt0gmT9kft8=`
+
+<!--
+Run `node --input-type=module -e "import {cspHashes} from '@vitejs/plugin-legacy'; console.log(cspHashes.map(h => 'sha256-'+h))"` to retrieve the value.
+-->
 
 These values (without the `sha256-` prefix) can also be retrieved via
 
 ```js
-const { cspHashes } = require('@vitejs/plugin-legacy')
+import { cspHashes } from '@vitejs/plugin-legacy'
 ```
 
 When using the `regenerator-runtime` polyfill, it will attempt to use the `globalThis` object to register itself. If `globalThis` is not available (it is [fairly new](https://caniuse.com/?search=globalThis) and not widely supported, including IE 11), it attempts to perform dynamic `Function(...)` call which violates the CSP. To avoid dynamic `eval` in the absence of `globalThis` consider adding `core-js/proposals/global-this` to `additionalLegacyPolyfills` to define it.

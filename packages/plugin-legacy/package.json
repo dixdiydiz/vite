@@ -1,10 +1,16 @@
 {
   "name": "@vitejs/plugin-legacy",
-  "version": "2.0.0-alpha.0",
+  "version": "3.0.1",
   "license": "MIT",
   "author": "Evan You",
   "files": [
     "dist"
+  ],
+  "keywords": [
+    "frontend",
+    "vite",
+    "vite-plugin",
+    "@vitejs/plugin-legacy"
   ],
   "main": "./dist/index.cjs",
   "module": "./dist/index.mjs",
@@ -19,11 +25,11 @@
   "scripts": {
     "dev": "unbuild --stub",
     "build": "unbuild && pnpm run patch-cjs",
-    "patch-cjs": "ts-node ../../scripts/patchCJS.ts",
+    "patch-cjs": "tsx ../../scripts/patchCJS.ts",
     "prepublishOnly": "npm run build"
   },
   "engines": {
-    "node": ">=14.6.0"
+    "node": "^14.18.0 || >=16.0.0"
   },
   "repository": {
     "type": "git",
@@ -35,17 +41,19 @@
   },
   "homepage": "https://github.com/vitejs/vite/tree/main/packages/plugin-legacy#readme",
   "dependencies": {
-    "@babel/standalone": "^7.17.11",
-    "core-js": "^3.22.4",
-    "magic-string": "^0.26.1",
-    "regenerator-runtime": "^0.13.9",
-    "systemjs": "^6.12.1"
+    "@babel/standalone": "^7.20.12",
+    "core-js": "^3.27.1",
+    "magic-string": "^0.27.0",
+    "regenerator-runtime": "^0.13.11",
+    "systemjs": "^6.13.0"
   },
   "peerDependencies": {
-    "vite": "^3.0.0-alpha"
+    "terser": "^5.4.0",
+    "vite": "^4.0.0"
   },
   "devDependencies": {
-    "vite": "workspace:*",
-    "@babel/core": "^7.17.10"
+    "@babel/core": "^7.20.12",
+    "picocolors": "^1.0.0",
+    "vite": "workspace:*"
   }
 }

@@ -42,30 +42,30 @@ After the server has already started, if a new dependency import is encountered 
 
 In a monorepo setup, a dependency may be a linked package from the same repo. Vite automatically detects dependencies that are not resolved from `node_modules` and treats the linked dep as source code. It will not attempt to bundle the linked dep, and will analyze the linked dep's dependency list instead.
 
-However, this requires the linked dep to be exported as ESM. If not, you can add the dependency to [`optimizeDeps.include`](/config/#optimizedeps-include) and [`build.commonjsOptions.include`](/config/#build-commonjsoptions) in your config.
+However, this requires the linked dep to be exported as ESM. If not, you can add the dependency to [`optimizeDeps.include`](/config/dep-optimization-options.md#optimizedeps-include) and [`build.commonjsOptions.include`](/config/build-options.md#build-commonjsoptions) in your config.
 
 ```js
 export default defineConfig({
   optimizeDeps: {
-    include: ['linked-dep']
+    include: ['linked-dep'],
   },
   build: {
     commonjsOptions: {
-      include: [/linked-dep/, /node_modules/]
-    }
-  }
+      include: [/linked-dep/, /node_modules/],
+    },
+  },
 })
 ```
 
 When making changes to the linked dep, restart the dev server with the `--force` command line option for the changes to take effect.
 
 ::: warning Deduping
-Due to differences in linked dependency resolution, transitive dependencies can deduplicated incorrectly, causing issues when used in runtime. If you stumble on this issue, use `npm pack` on the linked dependency to fix it.
+Due to differences in linked dependency resolution, transitive dependencies can deduplicate incorrectly, causing issues when used in runtime. If you stumble on this issue, use `npm pack` on the linked dependency to fix it.
 :::
 
 ## Customizing the Behavior
 
-The default dependency discovery heuristics may not always be desirable. In cases where you want to explicitly include/exclude dependencies from the list, use the [`optimizeDeps` config options](/config/#dep-optimization-options).
+The default dependency discovery heuristics may not always be desirable. In cases where you want to explicitly include/exclude dependencies from the list, use the [`optimizeDeps` config options](/config/dep-optimization-options.md).
 
 A typical use case for `optimizeDeps.include` or `optimizeDeps.exclude` is when you have an import that is not directly discoverable in the source code. For example, maybe the import is created as a result of a plugin transform. This means Vite won't be able to discover the import on the initial scan - it can only discover it after the file is requested by the browser and transformed. This will cause the server to immediately re-bundle after server start.
 
@@ -77,9 +77,10 @@ Both `include` and `exclude` can be used to deal with this. If the dependency is
 
 Vite caches the pre-bundled dependencies in `node_modules/.vite`. It determines whether it needs to re-run the pre-bundling step based on a few sources:
 
-- The `dependencies` list in your `package.json`.
-- Package manager lockfiles, e.g. `package-lock.json`, `yarn.lock`, or `pnpm-lock.yaml`.
+- Package manager lockfile content, e.g. `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml` or `bun.lockb`.
+- Patches folder modification time.
 - Relevant fields in your `vite.config.js`, if present.
+- `NODE_ENV` value.
 
 The pre-bundling step will only need to be re-run when one of the above has changed.
 

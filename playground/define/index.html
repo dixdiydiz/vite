@@ -6,6 +6,7 @@
 <p>Boolean <code class="boolean"></code></p>
 <p>Object <span class="pre object"></span></p>
 <p>Env Var <code class="env-var"></code></p>
+<p>process node env: <code class="process-node-env"></code></p>
 <p>process as property: <code class="process-as-property"></code></p>
 <p>spread object: <code class="spread-object"></code></p>
 <p>spread array: <code class="spread-array"></code></p>
@@ -15,6 +16,11 @@
 <p>no identifier substring: <span class="no-identifier-substring"></span></p>
 <p>define variable in html: <code class="exp-define">__EXP__</code></p>
 <p>import json: <code class="import-json"></code></p>
+<p>define in dep: <code class="define-in-dep"></code></p>
+<p>
+  import.meta.env.UNDEFINED: <code class="import-meta-env-undefined"></code>
+</p>
+<p>process.env.UNDEFINED: <code class="process-env-undefined"></code></p>
 
 <script type="module">
   const __VAR_NAME__ = true // ensure define doesn't replace var name
@@ -23,13 +29,14 @@
   text('.number', __NUMBER__)
   text('.boolean', __BOOLEAN__)
   text('.object', JSON.stringify(__OBJ__, null, 2))
+  text('.process-node-env', process.env.NODE_ENV)
   text('.env-var', process.env.SOMEVAR)
   text('.process-as-property', __OBJ__.process.env.SOMEVAR)
   text(
     '.spread-object',
     JSON.stringify({
-      ...(process.env.SOMEVAR ? { SOMEVAR: `"${process.env.SOMEVAR}"` } : {})
-    })
+      ...(process.env.SOMEVAR ? { SOMEVAR: `"${process.env.SOMEVAR}"` } : {}),
+    }),
   )
   text('.spread-array', JSON.stringify([...`"${__STRING__}"`]))
   text('.dollar-identifier', $DOLLAR)
@@ -48,6 +55,15 @@
   function text(el, text) {
     document.querySelector(el).textContent = text
   }
+
+  import {
+    defined,
+    importMetaEnvUndefined,
+    processEnvUndefined,
+  } from '@vitejs/test-commonjs-dep'
+  text('.define-in-dep', JSON.stringify(defined))
+  text('.import-meta-env-undefined', importMetaEnvUndefined)
+  text('.process-env-undefined', processEnvUndefined)
 </script>
 
 <style>

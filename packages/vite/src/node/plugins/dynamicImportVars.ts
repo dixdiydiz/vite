@@ -1,18 +1,26 @@
-import { posix } from 'path'
+import { posix } from 'node:path'
 import MagicString from 'magic-string'
 import { init, parse as parseImports } from 'es-module-lexer'
 import type { ImportSpecifier } from 'es-module-lexer'
 import { parse as parseJS } from 'acorn'
-import { createFilter } from '@rollup/pluginutils'
 import { dynamicImportToGlob } from '@rollup/plugin-dynamic-import-vars'
+import type { KnownAsTypeMap } from 'types/importGlob'
 import type { Plugin } from '../plugin'
 import type { ResolvedConfig } from '../config'
-import { normalizePath, parseRequest, requestQuerySplitRE } from '../utils'
+import {
+  createFilter,
+  normalizePath,
+  parseRequest,
+  removeComments,
+  requestQuerySplitRE,
+  transformStableResult,
+} from '../utils'
+import { toAbsoluteGlob } from './importMetaGlob'
 
-export const dynamicImportHelperId = '/@vite/dynamic-import-helper'
+export const dynamicImportHelperId = '\0vite/dynamic-import-helper'
 
 interface DynamicImportRequest {
-  as?: 'raw'
+  as?: keyof KnownAsTypeMap
 }
 
 interface DynamicImportPattern {
@@ -28,13 +36,13 @@ const dynamicImportHelper = (glob: Record<string, any>, path: string) => {
   }
   return new Promise((_, reject) => {
     ;(typeof queueMicrotask === 'function' ? queueMicrotask : setTimeout)(
-      reject.bind(null, new Error('Unknown variable dynamic import: ' + path))
+      reject.bind(null, new Error('Unknown variable dynamic import: ' + path)),
     )
   })
 }
 
 function parseDynamicImportPattern(
-  strings: string
+  strings: string,
 ): DynamicImportPattern | null {
   const filename = strings.slice(1, -1)
   const rawQuery = parseRequest(filename)
@@ -42,7 +50,7 @@ function parseDynamicImportPattern(
   const ast = (
     parseJS(strings, {
       ecmaVersion: 'latest',
-      sourceType: 'module'
+      sourceType: 'module',
     }) as any
   ).body[0].expression
 
@@ -58,10 +66,18 @@ function parseDynamicImportPattern(
     globParams = { as: 'raw' }
   }
 
+  if (rawQuery?.url !== undefined) {
+    globParams = { as: 'url' }
+  }
+
+  if (rawQuery?.worker !== undefined) {
+    globParams = { as: 'worker' }
+  }
+
   return {
     globParams,
     userPattern,
-    rawPattern
+    rawPattern,
   }
 }
 
@@ -70,8 +86,9 @@ export async function transformDynamicImport(
   importer: string,
   resolve: (
     url: string,
-    importer?: string
-  ) => Promise<string | undefined> | string | undefined
+    importer?: string,
+  ) => Promise<string | undefined> | string | undefined,
+  root: string,
 ): Promise<{
   glob: string
   pattern: string
@@ -84,10 +101,10 @@ export async function transformDynamicImport(
     }
     const relativeFileName = posix.relative(
       posix.dirname(normalizePath(importer)),
-      normalizePath(resolvedFileName)
+      normalizePath(resolvedFileName),
     )
     importSource = normalizePath(
-      '`' + (relativeFileName[0] === '.' ? '' : './') + relativeFileName + '`'
+      '`' + (relativeFileName[0] === '.' ? '' : './') + relativeFileName + '`',
     )
   }
 
@@ -99,12 +116,22 @@ export async function transformDynamicImport(
   const params = globParams
     ? `, ${JSON.stringify({ ...globParams, import: '*' })}`
     : ''
+
+  let newRawPattern = posix.relative(
+    posix.dirname(importer),
+    await toAbsoluteGlob(rawPattern, root, importer, resolve),
+  )
+
+  if (!/^\.{1,2}\//.test(newRawPattern)) {
+    newRawPattern = `./${newRawPattern}`
+  }
+
   const exp = `(import.meta.glob(${JSON.stringify(userPattern)}${params}))`
 
   return {
-    rawPattern,
+    rawPattern: newRawPattern,
     pattern: userPattern,
-    glob: exp
+    glob: exp,
   }
 }
 
@@ -112,12 +139,12 @@ export function dynamicImportVarsPlugin(config: ResolvedConfig): Plugin {
   const resolve = config.createResolver({
     preferRelative: true,
     tryIndex: false,
-    extensions: []
+    extensions: [],
   })
   const { include, exclude, warnOnError } =
     config.build.dynamicImportVarsOptions
   const filter = createFilter(include, exclude)
-  const isBuild = config.command === 'build'
+
   return {
     name: 'vite:dynamic-import-vars',
 
@@ -161,7 +188,7 @@ export function dynamicImportVarsPlugin(config: ResolvedConfig): Plugin {
           e: end,
           ss: expStart,
           se: expEnd,
-          d: dynamicIndex
+          d: dynamicIndex,
         } = imports[index]
 
         if (dynamicIndex === -1 || source[start] !== '`') {
@@ -171,10 +198,17 @@ export function dynamicImportVarsPlugin(config: ResolvedConfig): Plugin {
         s ||= new MagicString(source)
         let result
         try {
+          // When import string is using backticks, es-module-lexer `end` captures
+          // until the closing parenthesis, instead of the closing backtick.
+          // There may be inline comments between the backtick and the closing
+          // parenthesis, so we manually remove them for now.
+          // See https://github.com/guybedford/es-module-lexer/issues/118
+          const importSource = removeComments(source.slice(start, end)).trim()
           result = await transformDynamicImport(
-            source.slice(start, end),
+            importSource,
             importer,
-            resolve
+            resolve,
+            config.root,
           )
         } catch (error) {
           if (warnOnError) {
@@ -194,24 +228,18 @@ export function dynamicImportVarsPlugin(config: ResolvedConfig): Plugin {
         s.overwrite(
           expStart,
           expEnd,
-          `__variableDynamicImportRuntimeHelper(${glob}, \`${rawPattern}\`)`
+          `__variableDynamicImportRuntimeHelper(${glob}, \`${rawPattern}\`)`,
         )
       }
 
       if (s) {
         if (needDynamicImportHelper) {
           s.prepend(
-            `import __variableDynamicImportRuntimeHelper from "${dynamicImportHelperId}";`
+            `import __variableDynamicImportRuntimeHelper from "${dynamicImportHelperId}";`,
           )
         }
-        return {
-          code: s.toString(),
-          map:
-            !isBuild || config.build.sourcemap
-              ? s.generateMap({ hires: true })
-              : null
-        }
+        return transformStableResult(s, importer, config)
       }
-    }
+    },
   }
 }
