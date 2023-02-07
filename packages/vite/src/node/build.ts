@@ -145,7 +145,7 @@ export interface BuildOptions {
   terserOptions?: Terser.MinifyOptions
   /**
    * Will be merged with internal rollup options.
-   * https://rollupjs.org/guide/en/#big-list-of-options
+   * https://rollupjs.org/configuration-options/
    */
   rollupOptions?: RollupOptions
   /**
@@ -209,6 +209,12 @@ export interface BuildOptions {
    */
   ssrManifest?: boolean | string
   /**
+   * Emit assets during SSR.
+   * @experimental
+   * @default false
+   */
+  ssrEmitAssets?: boolean
+  /**
    * Set to false to disable reporting compressed chunk sizes.
    * Can slightly improve build speed.
    */
@@ -220,7 +226,7 @@ export interface BuildOptions {
   chunkSizeWarningLimit?: number
   /**
    * Rollup watch options
-   * https://rollupjs.org/guide/en/#watchoptions
+   * https://rollupjs.org/configuration-options/#watch
    */
   watch?: WatcherOptions | null
 }
@@ -324,6 +330,7 @@ export function resolveBuildOptions(
     lib: false,
     ssr: false,
     ssrManifest: false,
+    ssrEmitAssets: false,
     reportCompressedSize: true,
     chunkSizeWarningLimit: 500,
     watch: null,
@@ -645,7 +652,7 @@ export async function build(
     outputBuildError(e)
     throw e
   } finally {
-    if (bundle) bundle.close()
+    if (bundle) await bundle.close()
   }
 }
 
